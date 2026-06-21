@@ -21,7 +21,7 @@ ros2 topic pub --once /g1pilot/start_balancing std_msgs/msg/Bool "{data: true}"
 
 ###  PUBLISH GOAL
 ```bash
-ros2 topic pub --once /g1pilot/goal geometry_msgs/PointStamped "{header: {frame_id: 'map'}, point: {x: 1.0, y: 0.0, z: 0.0}}"
+ros2 topic pub --once /g1pilot/goal geometry_msgs/msg/PoseStamped "{header: {frame_id: 'map'}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}"
 ```
 
 ### ENABLE AUTONOMOUS NAVIGATION
@@ -41,7 +41,7 @@ ros2 topic pub --once /g1pilot/joy sensor_msgs/msg/Joy '{header: {stamp: {sec: 0
 ros2 topic pub --once /g1pilot/arms/enabled std_msgs/msg/Bool "{data: true}"
 ```
 
-### HOMMING ARMS
+### HOMING ARMS
 ```bash
 ros2 topic pub --once /g1pilot/arms/home std_msgs/msg/Bool "{data: true}"
 ```
@@ -58,3 +58,8 @@ ros2 topic pub --once /g1pilot/dx3/hand_action/right std_msgs/msg/String "{data:
 ```bash
 ros2 topic pub --once /g1pilot/dx3/hand_action/right std_msgs/msg/String "{data: 'open'}"
 ```
+```bash
+ros2 topic pub --once /g1pilot/dx3/hand_action/left std_msgs/msg/String "{data: 'pinch'}"
+```
+
+Valid DX3 hand actions are `open`, `pinch`, and `close`.

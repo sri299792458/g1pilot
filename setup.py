@@ -45,10 +45,10 @@ setup(
 
         # Configuration Files
         (f'share/{package_name}/config',
-            expand(['config/*.yaml'])),
+            expand(['config/*.yaml', 'config/*.json', 'config/*.rviz'])),
 
-        # RViz
-        (f'share/{package_name}/rviz', expand(['rviz/*.rviz'])),
+        # MOLA pipeline files
+        (f'share/{package_name}/pipelines', expand(['pipelines/*.yaml'])),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -1,25 +1,35 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, EnvironmentVariable
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-import os
-import sys
+
+def _as_bool(value):
+    return str(value).lower() in ("1", "true", "yes", "on")
+
+def _validate_robot_interface(context):
+    use_robot = _as_bool(LaunchConfiguration("use_robot").perform(context))
+    interface = LaunchConfiguration("interface").perform(context).strip()
+    if use_robot and not interface:
+        raise RuntimeError(
+            "G1_INTERFACE is required when use_robot:=true. "
+            "Set it with `export G1_INTERFACE=<iface>`, pass `interface:=<iface>`, "
+            "or launch with `use_robot:=false` for offline mode."
+        )
+    return []
 
 def generate_launch_description():
-    if not os.environ.get("G1_INTERFACE"):
-        sys.exit("ERROR: G1_INTERFACE environment variable is not set.\n"
-                 "Set it to your network interface, e.g.: export G1_INTERFACE=eno2")
     interface = LaunchConfiguration("interface")
     use_robot = LaunchConfiguration("use_robot")
     arm_controlled = LaunchConfiguration("arm_controlled")
     enable_arm_ui = LaunchConfiguration("enable_arm_ui")
 
     return LaunchDescription([
-        DeclareLaunchArgument("interface", default_value=EnvironmentVariable("G1_INTERFACE")),
+        DeclareLaunchArgument("interface", default_value=EnvironmentVariable("G1_INTERFACE", default_value="")),
         DeclareLaunchArgument("use_robot", default_value="true"),
         DeclareLaunchArgument("arm_controlled", default_value="both"),
         DeclareLaunchArgument("enable_arm_ui", default_value="true"),
+        OpaqueFunction(function=_validate_robot_interface),
 
         Node(
             package='g1pilot',
@@ -42,6 +52,13 @@ def generate_launch_description():
                 'interface': interface,
                 'use_robot': ParameterValue(use_robot, value_type=bool),
             }],
+            output='screen'
+        ),
+
+        Node(
+            package='g1pilot',
+            executable='dijkstra_planner',
+            name='dijkstra_planner',
             output='screen'
         ),
     ])

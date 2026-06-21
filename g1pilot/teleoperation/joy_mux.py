@@ -31,6 +31,7 @@ class JoyMux(Node):
         self.declare_parameter('wz_limit',0.4)
         self.declare_parameter('yaw_kp',1.5)
         self.declare_parameter('manual_priority_window',0.05)
+        self.declare_parameter('auto_timeout',0.25)
         self.path_topic=self.get_parameter('path_topic').value
         self.odom_topic=self.get_parameter('odom_topic').value
         self.manual_topic=self.get_parameter('manual_topic').value
@@ -44,6 +45,7 @@ class JoyMux(Node):
         self.wz_lim=float(self.get_parameter('wz_limit').value)
         self.yaw_kp=float(self.get_parameter('yaw_kp').value)
         self.man_win=float(self.get_parameter('manual_priority_window').value)
+        self.auto_timeout=float(self.get_parameter('auto_timeout').value)
         qos=QoSProfile(depth=10)
         self.sub_odom=self.create_subscription(Odometry,self.odom_topic,self.cb_odom,qos)
         self.sub_path=self.create_subscription(Path,self.path_topic,self.cb_path,qos)
@@ -53,6 +55,8 @@ class JoyMux(Node):
         self.timer=self.create_timer(1.0/self.rate,self.loop)
         self.sub_auto = self.create_subscription(Joy, '/g1pilot/auto_joy', self.cb_auto, qos)
         self.last_auto = None
+        self.t_last_auto = 0.0
+        self.stale_auto_logged = False
         self.x=self.y=self.yaw=0.0
         self.have_pose=False
         self.path=[]
@@ -65,6 +69,8 @@ class JoyMux(Node):
 
     def cb_auto(self, msg: Joy):
         self.last_auto = msg
+        self.t_last_auto = time.time()
+        self.stale_auto_logged = False
 
     def cb_odom(self,msg:Odometry):
         self.x=float(msg.pose.pose.position.x)
@@ -131,16 +137,32 @@ class JoyMux(Node):
         while a<-math.pi: a+=2*math.pi
         return a
 
+    def publish_stop(self):
+        joy = Joy()
+        joy.header.stamp = self.get_clock().now().to_msg()
+        joy.axes = [0.0] * 8
+        joy.buttons = [0] * 14
+        self.pub.publish(joy)
 
     def loop(self):
         now = time.time()
         use_manual = (self.last_manual is not None) and (not self.auto_enabled or (now - self.t_last_manual) < self.man_win)
+        auto_recent = (
+            self.last_auto is not None
+            and (self.auto_timeout <= 0.0 or (now - self.t_last_auto) <= self.auto_timeout)
+        )
 
-        if self.auto_enabled and self.last_auto is not None:
+        if use_manual:
+            self.pub.publish(self.last_manual)
+            return
+        elif self.auto_enabled and auto_recent:
             self.pub.publish(self.last_auto)
             return
-        elif use_manual:
-            self.pub.publish(self.last_manual)
+        elif self.auto_enabled and self.last_auto is not None:
+            if not self.stale_auto_logged:
+                self.get_logger().warn("Auto Joy command timed out; publishing stop.")
+                self.stale_auto_logged = True
+            self.publish_stop()
             return
 
 

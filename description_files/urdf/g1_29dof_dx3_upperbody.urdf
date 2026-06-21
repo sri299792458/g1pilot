@@ -27,7 +27,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/pelvis.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/pelvis.STL"/>
       </geometry>
       <material name="dark"/>
     </visual>
@@ -43,7 +43,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/waist_yaw_link_rev_1_0.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/waist_yaw_link_rev_1_0.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -64,7 +64,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/waist_roll_link_rev_1_0.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/waist_roll_link_rev_1_0.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -85,14 +85,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/torso_link_rev_1_0.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/torso_link_rev_1_0.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/torso_link_rev_1_0.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/torso_link_rev_1_0.STL"/>
       </geometry>
     </collision>
   </link>
@@ -119,14 +119,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/logo_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/logo_link.STL"/>
       </geometry>
       <material name="dark"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/logo_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/logo_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -141,14 +141,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/head_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/head_link.STL"/>
       </geometry>
       <material name="dark"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/head_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/head_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -185,9 +185,16 @@
   <!-- mid360 -->
   <link name="mid360_link"></link>
   <joint name="mid360_joint" type="fixed">
-    <origin xyz="0.0002835 0.00003 0.41618" rpy="0 0.04014257279586953 0"/>
+    <origin xyz="0.0002835 0.00003 0.428434" rpy="3.141592653589793 0.05112069379091391 0"/>
     <parent link="torso_link"/>
     <child link="mid360_link"/>
+  </joint>
+
+  <link name="livox_frame"></link>
+  <joint name="livox_joint" type="fixed">
+    <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+    <parent link="mid360_link"/>
+    <child link="livox_frame"/>
   </joint>
 
   <!-- Arm -->
@@ -200,7 +207,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_shoulder_pitch_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_shoulder_pitch_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -227,7 +234,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_shoulder_roll_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_shoulder_roll_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -254,14 +261,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_shoulder_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_shoulder_yaw_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_shoulder_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_shoulder_yaw_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -281,14 +288,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_elbow_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_elbow_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_elbow_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_elbow_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -315,14 +322,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_wrist_roll_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_wrist_roll_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_wrist_roll_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_wrist_roll_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -342,14 +349,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_wrist_pitch_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_wrist_pitch_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_wrist_pitch_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_wrist_pitch_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -369,14 +376,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_wrist_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_wrist_yaw_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_wrist_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_wrist_yaw_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -394,17 +401,26 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_palm_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_palm_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_palm_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_palm_link.STL"/>
       </geometry>
     </collision>
   </link>
+
+  <!-- Left Hand Point Contact Frames -->
+  <link name="left_hand_point_contact"/>
+  <joint name="left_hand_point_contact_fix_joint" type="fixed">
+    <parent link="left_hand_palm_link"/>
+    <child link="left_hand_point_contact"/>
+    <origin rpy="0 0 0" xyz="0.05 0.0 0.0"/>
+  </joint>
+
   <joint name="left_hand_thumb_0_joint" type="revolute">
     <origin xyz="0.0255 0 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
@@ -421,14 +437,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_thumb_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_thumb_0_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_thumb_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_thumb_0_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -448,7 +464,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_thumb_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_thumb_1_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -475,14 +491,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_thumb_2_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_thumb_2_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_thumb_2_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_thumb_2_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -502,14 +518,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_middle_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_middle_0_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_middle_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_middle_0_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -529,14 +545,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_middle_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_middle_1_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_middle_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_middle_1_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -556,14 +572,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_index_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_index_0_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_index_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_index_0_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -583,14 +599,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_index_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_index_1_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/left_hand_index_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/left_hand_index_1_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -603,7 +619,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_shoulder_pitch_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_shoulder_pitch_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -630,7 +646,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_shoulder_roll_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_shoulder_roll_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -657,14 +673,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_shoulder_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_shoulder_yaw_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_shoulder_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_shoulder_yaw_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -684,14 +700,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_elbow_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_elbow_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_elbow_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_elbow_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -718,14 +734,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_wrist_roll_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_wrist_roll_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_wrist_roll_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_wrist_roll_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -745,14 +761,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_wrist_pitch_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_wrist_pitch_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_wrist_pitch_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_wrist_pitch_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -772,14 +788,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_wrist_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_wrist_yaw_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_wrist_yaw_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_wrist_yaw_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -797,17 +813,26 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_palm_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_palm_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_palm_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_palm_link.STL"/>
       </geometry>
     </collision>
   </link>
+
+  <!-- Right Hand Point Contact Frames -->
+  <link name="right_hand_point_contact"/>
+  <joint name="right_hand_point_contact_fix_joint" type="fixed">
+    <parent link="right_hand_palm_link"/>
+    <child link="right_hand_point_contact"/>
+    <origin rpy="0 0 0" xyz="0.05 0.0 0.0"/>
+  </joint>
+
   <joint name="right_hand_thumb_0_joint" type="revolute">
     <origin xyz="0.0255 0 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
@@ -824,14 +849,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_thumb_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_thumb_0_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_thumb_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_thumb_0_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -851,7 +876,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_thumb_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_thumb_1_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -878,14 +903,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_thumb_2_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_thumb_2_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_thumb_2_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_thumb_2_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -905,14 +930,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_middle_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_middle_0_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_middle_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_middle_0_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -932,14 +957,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_middle_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_middle_1_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_middle_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_middle_1_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -959,14 +984,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_index_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_index_0_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_index_0_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_index_0_link.STL"/>
       </geometry>
     </collision>
   </link>
@@ -986,14 +1011,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_index_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_index_1_link.STL"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="/home/cdonoso/Desktop/ROS/g1pilot/description_files/meshes/right_hand_index_1_link.STL"/>
+        <mesh filename="package://g1pilot/description_files/meshes/right_hand_index_1_link.STL"/>
       </geometry>
     </collision>
   </link>

@@ -16,6 +16,17 @@ def yaw_from_quat(x, y, z, w):
     return math.atan2(s, c)
 
 class Nav2Point(Node):
+    def _get_positive_float_parameter(self, name):
+        raw_value = self.get_parameter(name).value
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'{name} must be a positive number, got {raw_value!r}') from exc
+
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f'{name} must be greater than 0.0, got {value!r}')
+        return value
+
     def __init__(self):
         super().__init__('nav2point')
         self.declare_parameter('publish_rate', 50.0)
@@ -31,7 +42,7 @@ class Nav2Point(Node):
         self.declare_parameter('vy_limit', 0.6)
         self.declare_parameter('wz_limit', 0.5)
         
-        self.rate = self.get_parameter('publish_rate').value
+        self.rate = self._get_positive_float_parameter('publish_rate')
         self.pos_kp = self.get_parameter('pos_kp').value
         self.yaw_kp = self.get_parameter('yaw_kp').value
         self.wp_tol = self.get_parameter('waypoint_tolerance').value
@@ -39,9 +50,9 @@ class Nav2Point(Node):
         self.frame_id = self.get_parameter('frame_id').value
         self.joy_topic = self.get_parameter('joy_topic').value
         self.path_topic = self.get_parameter('path_topic').value
-        self.vx_lim = self.get_parameter('vx_limit').value
-        self.vy_lim = self.get_parameter('vy_limit').value
-        self.wz_lim = self.get_parameter('wz_limit').value
+        self.vx_lim = self._get_positive_float_parameter('vx_limit')
+        self.vy_lim = self._get_positive_float_parameter('vy_limit')
+        self.wz_lim = self._get_positive_float_parameter('wz_limit')
         self.auto_enable_topic = self.get_parameter('auto_enable_topic').value
 
         qos = QoSProfile(depth=10)
@@ -73,7 +84,10 @@ class Nav2Point(Node):
         self.logged_no_pose = False
 
     def cb_auto_enable(self, msg: Bool):
-        self.auto_enabled = msg.data
+        was_enabled = self.auto_enabled
+        self.auto_enabled = bool(msg.data)
+        if was_enabled and not self.auto_enabled:
+            self.publish_stop_joy()
 
     def cb_path(self, msg: Path):
         self.path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
@@ -114,27 +128,31 @@ class Nav2Point(Node):
         m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.6, 0.0, 0.9
         self.pub_wp_marker.publish(m)
 
+    def publish_stop_joy(self):
+        joy = Joy()
+        joy.header.stamp = self.get_clock().now().to_msg()
+        joy.axes = [0.0] * 8
+        joy.buttons = [0] * 14
+        self.pub_joy.publish(joy)
+
     def loop(self):
         try:
-            if (len(self.path) == 0):
+            if not self.auto_enabled:
+                return
+
+            if len(self.path) == 0:
                 if not self.logged_no_path:
                     self.get_logger().warn('No path available.')
                     self.logged_no_path = True
                 return
             
-            if not self.have_pose and self.auto_enabled:
+            if not self.have_pose:
                 if not self.logged_no_pose:
                     self.get_logger().warn('No pose available.')
                     self.logged_no_pose = True
                 return
 
-            if (not self.path or len(self.path) == 0) and self.auto_enabled:
-                if not self.logged_no_path:
-                    self.get_logger().warn('No path available.')
-                    self.logged_no_path = True
-                return
-
-            if self.idx >= len(self.path) and self.auto_enabled:
+            if self.idx >= len(self.path):
                 if not self.logged_end_path:
                     self.get_logger().warn('Reached the end of the path.')
                     self.logged_end_path = True
@@ -166,9 +184,7 @@ class Nav2Point(Node):
             buttons = [0] * 14
 
             if dist_goal <= self.goal_tol:
-                joy.axes = axes
-                joy.buttons = buttons
-                self.pub_joy.publish(joy)
+                self.publish_stop_joy()
                 self.path = []
                 return
 
@@ -196,7 +212,7 @@ class Nav2Point(Node):
             axes[1] = ax1
             axes[0] = ax0
             axes[2] = ax3
-            buttons[8] = 1
+            buttons[7] = 1
 
             joy.axes = axes
             joy.buttons = buttons
@@ -207,13 +223,15 @@ class Nav2Point(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Nav2Point()
+    node = None
     try:
+        node = Nav2Point()
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

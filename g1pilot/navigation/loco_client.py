@@ -17,6 +17,9 @@ from unitree_sdk2py.g1.loco.g1_loco_api import (
     ROBOT_API_ID_LOCO_GET_FSM_MODE,
 )
 
+EXPECTED_JOY_AXES = 5
+EXPECTED_JOY_BUTTONS = 8
+
 
 def _rpc_get_int(client, api_id):
     try:
@@ -58,8 +61,8 @@ class G1LocoClient(Node):
             ChannelFactoryInitialize(0, interface)
             self.robot = LocoClient()
             self.robot.SetTimeout(10.0)
-            self.robot.SetFsmId(4)
             self.robot.Init()
+            self.robot.SetFsmId(4)
             self.robot.Damp()
             self.current_id = self.get_fsm_id()
             self.current_mode = self.get_fsm_mode()
@@ -102,13 +105,39 @@ class G1LocoClient(Node):
         if hasattr(self, key):
             delattr(self, key)
 
+    def _warn_if_short_joy(self, msg):
+        missing = []
+        if len(msg.axes) < EXPECTED_JOY_AXES:
+            missing.append(f"axes={len(msg.axes)} < {EXPECTED_JOY_AXES}")
+        if len(msg.buttons) < EXPECTED_JOY_BUTTONS:
+            missing.append(f"buttons={len(msg.buttons)} < {EXPECTED_JOY_BUTTONS}")
+
+        if missing:
+            self._log_once(
+                "warn",
+                f"Ignoring missing joystick fields as neutral values ({', '.join(missing)}).",
+                "_short_joy_logged",
+            )
+        else:
+            self._clear_once("_short_joy_logged")
+
+    def _axis(self, msg, idx, default=0.0):
+        if 0 <= idx < len(msg.axes):
+            return msg.axes[idx]
+        return default
+
+    def _button(self, msg, idx, default=0):
+        if 0 <= idx < len(msg.buttons):
+            return msg.buttons[idx]
+        return default
+
     def _btn_rising(self, msg, idx):
         prev = self.prev_buttons.get(idx, 0)
-        return msg.buttons[idx] == 1 and prev == 0
+        return self._button(msg, idx) == 1 and prev == 0
 
     def _btn_falling(self, msg, idx):
         prev = self.prev_buttons.get(idx, 0)
-        return msg.buttons[idx] == 0 and prev == 1
+        return self._button(msg, idx) == 0 and prev == 1
 
     def _axis_edge(self, cur, prev, val):
         return cur == val and prev != val, cur != val and prev == val
@@ -151,15 +180,21 @@ class G1LocoClient(Node):
     def start_balancing_callback(self, msg: Bool):
         if msg.data and not self.balanced:
             self._log_once("info", "Starting balancing procedure...", "_start_balance_req_logged")
-            self.entering_balancing(max_height=0.5, step=0.02)
-            self._log_once("info", "Balancing procedure completed.", "_balance_completed_logged")
+            if self.entering_balancing(max_height=0.5, step=0.02):
+                self._log_once("info", "Balancing procedure completed.", "_balance_completed_logged")
+            else:
+                self._log_once("warn", "Balancing procedure did not complete.", "_balance_failed_logged")
         elif self.balanced:
             self._log_once("info", "Already balanced, no action taken.", "_already_balanced_notice_logged")
 
     def joystick_callback(self, msg: Joy):
         try:
+            self._warn_if_short_joy(msg)
+
             if not self.prev_buttons:
-                self.prev_buttons = {i: 0 for i in range(len(msg.buttons))}
+                self.prev_buttons = {
+                    i: 0 for i in range(max(len(msg.buttons), EXPECTED_JOY_BUTTONS))
+                }
 
             if not self.balanced:
                 self._log_once("warn", "Robot is not balanced, cannot move.", "_warn_not_balanced_logged")
@@ -213,40 +248,44 @@ class G1LocoClient(Node):
                 self._clear_once("_e_stop_button_pressed_logged")
 
             # Gripper controls
-            if msg.axes[4] ==1.0 and self._btn_rising(msg, 3):
+            gripper_side_axis = self._axis(msg, 4)
+            if gripper_side_axis == 1.0 and self._btn_rising(msg, 3):
                 self._log_once("info", "Open right gripper.", "_open_right_gripper_logged")
                 self.right_gripper_pub.publish(String(data="open"))
-            if msg.axes[4] ==1.0 and self._btn_falling(msg, 3):
+            if gripper_side_axis == 1.0 and self._btn_falling(msg, 3):
                 self._log_once("info", "Close right gripper.", "_close_right_gripper_logged")
                 self.right_gripper_pub.publish(String(data="close"))
 
-            if msg.axes[4] ==-1.0 and self._btn_rising(msg, 3):
+            if gripper_side_axis == -1.0 and self._btn_rising(msg, 3):
                 self._log_once("info", "Open left gripper.", "_open_left_gripper_logged")
                 self.left_gripper_pub.publish(String(data="open"))
-            if msg.axes[4] ==-1.0 and self._btn_falling(msg, 3):
+            if gripper_side_axis == -1.0 and self._btn_falling(msg, 3):
                 self._log_once("info", "Close left gripper.", "_close_left_gripper_logged")
                 self.left_gripper_pub.publish(String(data="close"))
 
             if self._btn_rising(msg, 4):
                 if not self.balanced:
                     self._log_once("info", "Starting balancing procedure...", "_start_balance_r1_logged")
-                    self.entering_balancing(max_height=0.5, step=0.02)
-                    self._log_once("info", "Balancing procedure completed.", "_balance_completed_r1_logged")
+                    if self.entering_balancing(max_height=0.5, step=0.02):
+                        self._log_once("info", "Balancing procedure completed.", "_balance_completed_r1_logged")
+                    else:
+                        self._log_once("warn", "Balancing procedure did not complete.", "_balance_failed_r1_logged")
                 else:
                     self._log_once("info", "Already balanced, no action taken.", "_already_balanced_notice_r1_logged")
             if self._btn_falling(msg, 4):
                 self._clear_once("_start_balance_r1_logged")
                 self._clear_once("_balance_completed_r1_logged")
+                self._clear_once("_balance_failed_r1_logged")
                 self._clear_once("_already_balanced_notice_r1_logged")
 
-            if msg.buttons[5] == 0 and not self.robot_stopped and self.balanced:
+            if self._button(msg, 5) == 0 and not self.robot_stopped and self.balanced:
                 if self.use_robot and self.robot is not None:
                     self.robot.StopMove()
 
-            if msg.buttons[7] == 1 and not self.robot_stopped and self.balanced:
-                vx = round(msg.axes[1] * -0.5, 2)
-                vy = round(msg.axes[0] * -0.5, 2)
-                yaw = round(msg.axes[2] * -0.5, 2)
+            if self._button(msg, 7) == 1 and not self.robot_stopped and self.balanced:
+                vx = round(self._axis(msg, 1) * -0.5, 2)
+                vy = round(self._axis(msg, 0) * -0.5, 2)
+                yaw = round(self._axis(msg, 2) * -0.5, 2)
                 self._log_once("info", f"Moving with vx: {vx}, vy: {vy}, yaw: {yaw}", "_moving_logged")
                 if self.use_robot and self.robot is not None:
                     if abs(vx) < 0.03 and abs(vy) < 0.03 and abs(yaw) < 0.03:
@@ -254,7 +293,10 @@ class G1LocoClient(Node):
                     else:
                         self.robot.Move(vx=vx, vy=vy, vyaw=yaw, continous_move=True)
 
-            self.prev_buttons = {i: msg.buttons[i] for i in range(len(msg.buttons))}
+            self.prev_buttons = {
+                i: self._button(msg, i)
+                for i in range(max(len(msg.buttons), EXPECTED_JOY_BUTTONS))
+            }
             self.prev_axis_last = axis_last
 
         except Exception as e:
@@ -269,21 +311,49 @@ class G1LocoClient(Node):
         if not self.use_robot or self.robot is None:
             self.balanced = True
             self.get_logger().info("Sim balancing done (use_robot:=false).")
-            return
+            return True
         height = 0.0
+        reached_start_height = False
         while height < max_height and not self.robot_stopped:
             height += step
             self.robot.SetStandHeight(height)
-            if self.get_fsm_mode() == 0 and height >= 0.2:
+            fsm_mode = self.get_fsm_mode()
+            if fsm_mode == 0 and height >= 0.2:
                 self._log_once("info", f"Reached max height: {height}", "_balance_reach_height_logged")
+                reached_start_height = True
                 break
-            elif self.get_fsm_mode() != 0:
-                self._log_once("warn", "Problems during balancing, stopping...", "_balance_problem_stop_logged")
-                break
+            elif fsm_mode != 0:
+                self._log_once(
+                    "warn",
+                    f"Problems during balancing, stopping before BalanceStand/Start. FSM mode: {fsm_mode}",
+                    "_balance_problem_stop_logged",
+                )
+                self.balanced = False
+                return False
+
+        if self.robot_stopped:
+            self._log_once(
+                "warn",
+                "Balancing aborted because robot is stopped.",
+                "_balance_aborted_robot_stopped_logged",
+            )
+            self.balanced = False
+            return False
+
+        if not reached_start_height:
+            self._log_once(
+                "warn",
+                "Balancing did not reach the required start height.",
+                "_balance_height_not_reached_logged",
+            )
+            self.balanced = False
+            return False
+
         self.robot.BalanceStand(1)
         self.robot.SetStandHeight(height)
         self.robot.Start()
         self.balanced = True
+        return True
 
 
 def main(args=None):

@@ -16,6 +16,7 @@ import os
 
 def generate_launch_description():
     myDir = get_package_share_directory("mola_lidar_odometry")
+    g1pilot_dir = get_package_share_directory("g1pilot")
 
     # -------------------
     #     Arguments
@@ -76,7 +77,9 @@ def generate_launch_description():
         name='MOLA_TF_MAP', value=LaunchConfiguration('mola_state_estimator_reference_frame'))
     # ~~~~~~~~~~~~
     mola_lo_pipeline_arg = DeclareLaunchArgument(
-        "mola_lo_pipeline", default_value="/ros2_ws/src/g1pilot/pipelines/lidar3d.yaml", description="The LiDAR-Odometry pipeline configuration YAML file defining the LO system. Absolute path, or relative to 'mola-cli-launchs/lidar_odometry_ros2.yaml'. Default is the 'lidar3d-default.yaml' system described in the IJRR 2025 paper.")
+        "mola_lo_pipeline",
+        default_value=os.path.join(g1pilot_dir, "pipelines", "lidar3d.yaml"),
+        description="The LiDAR-Odometry pipeline configuration YAML file defining the LO system. Absolute path, or relative to 'mola-cli-launchs/lidar_odometry_ros2.yaml'. Default is the 'lidar3d-default.yaml' system described in the IJRR 2025 paper.")
     mola_lo_pipeline_arg_env_var = SetEnvironmentVariable(
         name='MOLA_ODOMETRY_PIPELINE_YAML', value=LaunchConfiguration('mola_lo_pipeline'))
     # ~~~~~~~~~~~~
@@ -287,6 +290,6 @@ def generate_launch_description():
         mola_precise_deskew_from_imu_arg,
         mola_precise_deskew_from_imu_env_var,
         use_rviz_arg,
-        node_group,
         disable_tf_publish_env_var,
+        node_group,
     ])

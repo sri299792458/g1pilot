@@ -9,9 +9,8 @@ from PyQt6.QtCore import QTimer
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from g1pilot.utils.window_style import DarkStyle
-from geometry_msgs.msg import PointStamped
 
 
 class StreamDeck(Node):
@@ -22,18 +21,19 @@ class StreamDeck(Node):
         self.pub_start_balancing = self.create_publisher(Bool, '/g1pilot/start_balancing', 10)
         self.pub_arms_enabled = self.create_publisher(Bool, '/g1pilot/arms/enabled', 10)
         self.pub_arms_home = self.create_publisher(Bool, '/g1pilot/arms/home', 10)
-        self.pub_left_hand = self.create_publisher(PointStamped, '/left_hand/dx3/action', 10)
-        self.pub_right_hand = self.create_publisher(PointStamped, '/right_hand/dx3/action', 10)
+        self.pub_left_hand = self.create_publisher(String, '/g1pilot/dx3/hand_action/left', 10)
+        self.pub_right_hand = self.create_publisher(String, '/g1pilot/dx3/hand_action/right', 10)
         self.pub_emergency_stop = self.create_publisher(Bool, '/g1pilot/emergency_stop', 10)
-        self.start_opensot_pub = self.create_publisher(Bool, '/g1pilot/start_opensot', 10)
 
     def publish_bool(self, pub, value: bool):
         msg = Bool()
         msg.data = value
         pub.publish(msg)
 
-    def publish_point(self, pub, point: PointStamped):
-        pub.publish(point)
+    def publish_string(self, pub, value: str):
+        msg = String()
+        msg.data = value
+        pub.publish(msg)
 
 class ButtonGUI(QWidget):
     """PyQt6 GUI for ROS2 StreamDeck with timed and emergency behaviors."""
@@ -61,7 +61,7 @@ class ButtonGUI(QWidget):
         button_actions = {
             (0, 0): ("START", lambda: self.flash_button((0, 0), self.node.pub_start)),
             (0, 1): ("START\nBALANCING", lambda: self.flash_button((0, 1), self.node.pub_start_balancing)),
-            (0, 4): ("OPENSOT", lambda: self.toggle_button((0, 4), self.node.start_opensot_pub)),
+            (0, 4): ("ARMS\nENABLED", lambda: self.toggle_button((0, 4), self.node.pub_arms_enabled)),
 
             # (1, 0): ("HOMING\nARMS", lambda: self.flash_button((1, 0), self.node.pub_arms_home)),
 
@@ -188,13 +188,7 @@ class ButtonGUI(QWidget):
 
         self.set_button_active(this_pos, True)
         self.set_button_active(other_pos, False)
-        if action == "open":
-            point = PointStamped()
-            point.point.x = 0.0
-        else:
-            point = PointStamped()
-            point.point.x = 1.0
-        self.node.publish_point(pub, point)
+        self.node.publish_string(pub, action)
 
     def emergency_stop(self):
         """Turns all buttons OFF and publishes False to all Bool topics."""

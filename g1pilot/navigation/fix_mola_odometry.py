@@ -47,6 +47,7 @@ class FixMolaOdometry(Node):
         self.declare_parameter('base_frame', 'pelvis')
         self.declare_parameter('normalize_quaternion', True)
         self.declare_parameter('publish_odometry', True)
+        self.declare_parameter('publish_tf', True)
 
         in_topic = self.get_parameter('in_topic').value
         out_topic = self.get_parameter('out_topic').value
@@ -54,19 +55,23 @@ class FixMolaOdometry(Node):
         self.base_frame = self.get_parameter('base_frame').value
         self.normalize_quat = self.get_parameter('normalize_quaternion').value
         self.publish_odometry = self.get_parameter('publish_odometry').value
+        self.publish_tf = self.get_parameter('publish_tf').value
 
         q_fix = euler_to_quat(0.0, 0.0, 0.0)
         self.q_prefix = q_fix
 
-        self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_broadcaster = TransformBroadcaster(self) if self.publish_tf else None
         self.sub = self.create_subscription(Odometry, in_topic, self.cb_odom, 10)
         self.pub = self.create_publisher(Odometry, out_topic, 10) if self.publish_odometry else None
 
         self.get_logger().info(f"Listening to MOLA odometry on: {in_topic}")
-        self.get_logger().info(f"Publishing TF: {self.map_frame} → {self.base_frame}")
+        if self.publish_tf:
+            self.get_logger().info(f"Publishing TF: {self.map_frame} -> {self.base_frame}")
+        else:
+            self.get_logger().info("TF publishing disabled; corrected odometry only.")
         if self.publish_odometry:
             self.get_logger().info(f"Also publishing corrected odometry on: {out_topic}")
-        self.get_logger().info("Applied fixed orientation correction: Rz(π) (180° yaw)")
+        self.get_logger().info("Applied compatibility correction: y position sign flip and quaternion w sign flip")
 
     def cb_odom(self, msg: Odometry):
         out = Odometry()
@@ -96,15 +101,16 @@ class FixMolaOdometry(Node):
         if self.pub:
             self.pub.publish(out)
 
-        t = TransformStamped()
-        t.header = out.header
-        t.header.frame_id = self.map_frame
-        t.child_frame_id = self.base_frame
-        t.transform.translation.x = px
-        t.transform.translation.y = py
-        t.transform.translation.z = pz
-        t.transform.rotation = out.pose.pose.orientation
-        self.tf_broadcaster.sendTransform(t)
+        if self.publish_tf:
+            t = TransformStamped()
+            t.header = out.header
+            t.header.frame_id = self.map_frame
+            t.child_frame_id = self.base_frame
+            t.transform.translation.x = px
+            t.transform.translation.y = py
+            t.transform.translation.z = pz
+            t.transform.rotation = out.pose.pose.orientation
+            self.tf_broadcaster.sendTransform(t)
 
 
 def main():

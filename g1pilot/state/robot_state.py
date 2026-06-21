@@ -7,9 +7,6 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile
 
 from sensor_msgs.msg import JointState, Imu
-from std_msgs.msg import Header
-from geometry_msgs.msg import TransformStamped
-from tf2_ros import TransformBroadcaster
 
 from astroviz_interfaces.msg import MotorState, MotorStateList
 
@@ -81,6 +78,8 @@ _joint_index_to_ros_name = {
     G1JointIndex.RightWristYaw: "right_wrist_yaw_joint",
 }
 
+IMU_FRAME = "imu_in_pelvis"
+
 
 class RobotState(Node):
     def __init__(self):
@@ -89,37 +88,39 @@ class RobotState(Node):
         self.declare_parameter('use_robot', True)
         self.declare_parameter('interface', '')
         self.declare_parameter('publish_joint_states', True)
+        self.declare_parameter('sim_rate_hz', 50.0)
 
         self.use_robot = bool(self.get_parameter('use_robot').value)
         interface = self.get_parameter('interface').get_parameter_value().string_value
         self.publish_joint_states = bool(self.get_parameter('publish_joint_states').value)
+        self.sim_rate_hz = float(self.get_parameter('sim_rate_hz').value)
+        if self.sim_rate_hz <= 0.0:
+            raise ValueError(f"sim_rate_hz must be greater than 0.0, got {self.sim_rate_hz}")
         self.ns = '/g1pilot'
 
         qos_profile = QoSProfile(depth=10)
         self.joint_pub = self.create_publisher(JointState, "/joint_states", qos_profile)
         self.imu_pub = self.create_publisher(Imu, f"{self.ns}/imu", qos_profile)
         self.motor_state_pub = self.create_publisher(MotorStateList, f"{self.ns}/motor_state", qos_profile)
-        self.tf_broadcaster = TransformBroadcaster(self)
 
         self.joint_indices = sorted(_joint_index_to_ros_name.keys())
         self.joint_names = [_joint_index_to_ros_name[i] for i in self.joint_indices]
-        self.joint_state_msg = JointState()
-        self.joint_state_msg.name = self.joint_names
+        self.expected_motor_count = max(self.joint_indices) + 1
+        self._warned_short_motor_state = False
 
         if self.use_robot:
             ChannelFactoryInitialize(0, interface)
             self.subscriber_low_state = ChannelSubscriber("rt/lowstate", LowState_)
             self.subscriber_low_state.Init(self.callback_lowstate)
         else:
-            self.create_timer(0.05, self._sim_tick)
+            self.create_timer(1.0 / self.sim_rate_hz, self._sim_tick)
 
     def callback_lowstate(self, msg: LowState_):
         now = self.get_clock().now().to_msg()
 
         imu_msg = Imu()
-        imu_msg.header = Header()
         imu_msg.header.stamp = now
-        imu_msg.header.frame_id = "pelvis"
+        imu_msg.header.frame_id = IMU_FRAME
         imu_msg.orientation.w = float(msg.imu_state.quaternion[0])
         imu_msg.orientation.x = float(msg.imu_state.quaternion[1])
         imu_msg.orientation.y = float(msg.imu_state.quaternion[2])
@@ -132,20 +133,17 @@ class RobotState(Node):
         imu_msg.linear_acceleration.z = float(msg.imu_state.accelerometer[2])
         self.imu_pub.publish(imu_msg)
 
-        # TF pelvis -> imu_link
-        t = TransformStamped()
-        t.header.stamp = now
-        t.header.frame_id = "pelvis"
-        t.child_frame_id = "imu_link"
-        t.transform.translation.x = 0.0
-        t.transform.translation.y = 0.0
-        t.transform.translation.z = 0.0
-        t.transform.rotation = imu_msg.orientation
-        self.tf_broadcaster.sendTransform(t)
-
         # Motor states
+        joint_names = []
         positions = []
         motor_list_msg = MotorStateList()
+        motor_count = len(msg.motor_state)
+        if motor_count < self.expected_motor_count and not self._warned_short_motor_state:
+            self.get_logger().warn(
+                f"LowState motor_state has {motor_count} entries; expected at least "
+                f"{self.expected_motor_count}. Publishing partial joint state."
+            )
+            self._warned_short_motor_state = True
         for idx in self.joint_indices:
             if idx < len(msg.motor_state):
                 m = msg.motor_state[idx]
@@ -156,20 +154,23 @@ class RobotState(Node):
                 motor_state.position = float(m.q)
                 motor_state.velocity = float(m.dq)
                 motor_list_msg.motor_list.append(motor_state)
+                joint_names.append(_joint_index_to_ros_name[idx])
                 positions.append(float(m.q))
 
         self.motor_state_pub.publish(motor_list_msg)
 
         if self.publish_joint_states:
-            self.joint_state_msg.header.stamp = now
-            self.joint_state_msg.position = positions
-            self.joint_pub.publish(self.joint_state_msg)
+            js = JointState()
+            js.header.stamp = now
+            js.name = joint_names
+            js.position = positions
+            self.joint_pub.publish(js)
 
     def _sim_tick(self):
         now = self.get_clock().now().to_msg()
         imu_msg = Imu()
         imu_msg.header.stamp = now
-        imu_msg.header.frame_id = "pelvis"
+        imu_msg.header.frame_id = IMU_FRAME
         imu_msg.orientation.w = 1.0
         self.imu_pub.publish(imu_msg)
 

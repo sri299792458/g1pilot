@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from copy import deepcopy
 import subprocess
 import threading
 import time
@@ -11,8 +12,14 @@ from xbot2_interface import pyxbot2_collision
 from xbot2_interface import pyaffine3
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rcl_interfaces.srv import GetParameters
+
+try:
+    from rclpy._rclpy_pybind11 import RCLError
+except ImportError:
+    RCLError = None
 
 from geometry_msgs.msg import PoseStamped, TransformStamped, WrenchStamped,Point
 from std_msgs.msg import Bool, Float64
@@ -27,7 +34,11 @@ from scipy.spatial.transform import Rotation as R
 import pyopensot as pysot
 from pyopensot.tasks.velocity import Postural, Cartesian, CoM
 from pyopensot.constraints.velocity import JointLimits, VelocityLimits
-from pyopensot_collision.constraints.velocity import CollisionAvoidance
+
+try:
+    from pyopensot_collision.constraints.velocity import CollisionAvoidance
+except ImportError:
+    CollisionAvoidance = None
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
@@ -43,8 +54,34 @@ from g1pilot.utils.common import (
     G1_29_JointIndex,
     DataBuffer,
 )
+from g1pilot.utils.joints_names import JOINT_NAMES_ROS
 
 G1_NUM_MOTOR = 29 # 12 body + 17 arm
+
+LEFT_ARM_JOINTS = (
+    G1_29_JointArmIndex.kLeftShoulderPitch,
+    G1_29_JointArmIndex.kLeftShoulderRoll,
+    G1_29_JointArmIndex.kLeftShoulderYaw,
+    G1_29_JointArmIndex.kLeftElbow,
+    G1_29_JointArmIndex.kLeftWristRoll,
+    G1_29_JointArmIndex.kLeftWristPitch,
+    G1_29_JointArmIndex.kLeftWristyaw,
+)
+
+RIGHT_ARM_JOINTS = (
+    G1_29_JointArmIndex.kRightShoulderPitch,
+    G1_29_JointArmIndex.kRightShoulderRoll,
+    G1_29_JointArmIndex.kRightShoulderYaw,
+    G1_29_JointArmIndex.kRightElbow,
+    G1_29_JointArmIndex.kRightWristRoll,
+    G1_29_JointArmIndex.kRightWristPitch,
+    G1_29_JointArmIndex.kRightWristYaw,
+)
+
+RIGHT_HAND_GOAL_TOPIC = "/g1pilot/hand_goal/right"
+LEFT_HAND_GOAL_TOPIC = "/g1pilot/hand_goal/left"
+ARMS_ENABLED_TOPIC = "/g1pilot/arms/enabled"
+ARMS_HOME_TOPIC = "/g1pilot/arms/home"
 
 q_init = [
         -0.1,
@@ -94,11 +131,22 @@ class G1CollisionAvoidanceNode(Node):
         self.declare_parameter("interface", "")
         self.declare_parameter("send_cmds_to_robot", True)
         self.declare_parameter("publish_joint_states_opensot", False)
+        self.declare_parameter("robot_description_timeout_s", 10.0)
+        self.declare_parameter("arm_controlled", "both")
         self.interface = str(self.get_parameter("interface").value)
         self.use_robot = bool(self.get_parameter("use_robot").value)
+        self.declare_parameter("publish_pelvis_tf", not self.use_robot)
         self.enable_collision_avoidance = bool(self.get_parameter("enable_collision_avoidance").value)
         self.send_cmds_to_robot = bool(self.get_parameter("send_cmds_to_robot").value)
         self.publish_joint_states_opensot = bool(self.get_parameter("publish_joint_states_opensot").value)
+        self.publish_pelvis_tf = bool(self.get_parameter("publish_pelvis_tf").value)
+        self.robot_description_timeout_s = float(self.get_parameter("robot_description_timeout_s").value)
+        self.arm_controlled = self._normalize_arm_controlled(
+            self.get_parameter("arm_controlled").get_parameter_value().string_value
+        )
+        self.control_right_arm = self.arm_controlled in ("right", "both")
+        self.control_left_arm = self.arm_controlled in ("left", "both")
+        self.controlled_arm_joints = self._controlled_arm_joints(self.arm_controlled)
 
         self.control_dt = 0.005
         self.time = 0.0
@@ -109,56 +157,54 @@ class G1CollisionAvoidanceNode(Node):
         self.mode_machine = 0
         self.motors_on = 1
 
-        self.right_hand_pose_ref = None
-        self.left_hand_pose_ref = None
+        self.right_hand_goal = None
+        self.left_hand_goal = None
         self.emergency_stop = False
         self._initialized = False
-        self.start_opensot = False
+        self.arms_enabled = False
 
 
 
         self.client = self.create_client(GetParameters, "/robot_state_publisher/get_parameters")
         self.joint_state_publisher = self.create_publisher(JointState, "/joint_states", 10)
         self.base_height_publisher = self.create_publisher(Float64, "/base_height", 10)
-        self.base_link_broadcaster = TransformBroadcaster(self)
+        self.tf_broadcaster = TransformBroadcaster(self)
 
-        # statis transform between world and pelvis
-        t = TransformStamped()
-        t.header.frame_id = "world"
-        t.child_frame_id = "pelvis"
-        t.transform.translation.x = 0.0
-        t.transform.translation.y = 0.0
-        t.transform.translation.z = 0.0
-        t.transform.rotation.x = 0.0
-        t.transform.rotation.y = 0.0
-        t.transform.rotation.z = 0.0
-        t.transform.rotation.w = 1.0
-        self.base_link_broadcaster.sendTransform(t)
-
-        self.start_opensot_sub = self.create_subscription(Bool, "/g1pilot/start_opensot", self.start_opensot_callback, 10)
+        self.arms_enabled_sub = self.create_subscription(Bool, ARMS_ENABLED_TOPIC, self.arms_enabled_callback, 10)
+        self.arms_home_sub = self.create_subscription(Bool, ARMS_HOME_TOPIC, self.arms_home_callback, 10)
         self.emergency_stop_sub = self.create_subscription(Bool, "/g1pilot/emergency_stop", self.emergency_stop_callback, 10)
-        self.righ_hand_subscriber = self.create_subscription(
-            PoseStamped, "/g1pilot/right_hand/pose_ref", self.right_hand_pose_ref_callback, 10
-        )
-        self.left_hand_subscriber = self.create_subscription(
-            PoseStamped, "/g1pilot/left_hand/pose_ref", self.left_hand_pose_ref_callback, 10
-        )
+        if self.control_right_arm:
+            self.right_hand_goal_subscriber = self.create_subscription(
+                PoseStamped, RIGHT_HAND_GOAL_TOPIC, self.right_hand_goal_callback, 10
+            )
+        if self.control_left_arm:
+            self.left_hand_goal_subscriber = self.create_subscription(
+                PoseStamped, LEFT_HAND_GOAL_TOPIC, self.left_hand_goal_callback, 10
+            )
 
+        wait_started = time.monotonic()
         while not self.client.wait_for_service(timeout_sec=1.0):
+            elapsed = time.monotonic() - wait_started
+            if elapsed >= self.robot_description_timeout_s:
+                raise RuntimeError(
+                    "Timed out waiting for /robot_state_publisher/get_parameters. "
+                    "Start robot_state_publisher or launch manipulation with "
+                    "start_robot_state_publisher:=true."
+                )
             self.get_logger().warn("Service /robot_state_publisher/get_parameters not available, waiting...")
 
         request = GetParameters.Request()
         request.names = ["robot_description"]
         future = self.client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=self.robot_description_timeout_s)
 
         self.urdf = None
-        if future.result() is not None:
+        if future.done() and future.result() is not None:
             values = future.result().values
             for val in values:
                 self.urdf = val.string_value
         else:
-            self.get_logger().error("Failed to get robot_description from parameter server")
+            raise RuntimeError("Failed to get robot_description from robot_state_publisher")
 
         self.interactive_marker_server = InteractiveMarkerServer(self, "teleoperation_markers")
         self.marker_poses = {}
@@ -180,12 +226,19 @@ class G1CollisionAvoidanceNode(Node):
         self.crc = None
         self.msg = None
         self.all_motor_q = None
+        self.model_joint_names = []
+        self.model_q_index_by_motor_id = {}
+        self._missing_model_motor_warnings = set()
 
         if self.use_robot:
             self.get_logger().info("use_robot=True -> Initializing Unitree DDS interface")
             self.initialize_interface()
         else:
             self.get_logger().warn("use_robot=False -> Running in simulation/visualization mode (publishing only /joint_states)")
+        if self.publish_pelvis_tf:
+            self.get_logger().info("OpenSoT will publish world -> pelvis TF.")
+        else:
+            self.get_logger().info("OpenSoT will not publish pelvis TF.")
 
         self.initialize()
         self.initialize_imarkers()
@@ -201,6 +254,22 @@ class G1CollisionAvoidanceNode(Node):
                     self.motor_state[i].q = msg.motor_state[i].q
                     self.motor_state[i].dq = msg.motor_state[i].dq
             time.sleep(0.001)
+
+    def _normalize_arm_controlled(self, arm_controlled):
+        arm_controlled = arm_controlled.strip().lower()
+        if arm_controlled not in ("left", "right", "both"):
+            raise ValueError(
+                "arm_controlled must be one of: left, right, both "
+                f"(got {arm_controlled!r})"
+            )
+        return arm_controlled
+
+    def _controlled_arm_joints(self, arm_controlled):
+        if arm_controlled == "left":
+            return LEFT_ARM_JOINTS
+        if arm_controlled == "right":
+            return RIGHT_ARM_JOINTS
+        return LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
 
     def initialize_interface(self):
         ChannelFactoryInitialize(0, self.interface)
@@ -234,7 +303,7 @@ class G1CollisionAvoidanceNode(Node):
 
         wrist_vals = {m.value for m in G1_29_JointWristIndex}
         for jid in G1_29_JointArmIndex:
-            self.msg.motor_cmd[jid].mode = 1
+            self.msg.motor_cmd[jid].mode = 1 if jid in self.controlled_arm_joints else 0
             if jid.value in wrist_vals:
                 self.msg.motor_cmd[jid].kp = self.kp_wrist
                 self.msg.motor_cmd[jid].kd = self.kd_wrist
@@ -258,17 +327,126 @@ class G1CollisionAvoidanceNode(Node):
             q[i] = msg.motor_state[i].q
         return q
 
-    def right_hand_pose_ref_callback(self, msg: PoseStamped):
-        self.right_hand_pose_ref = msg
+    def _configure_model_joint_mapping(self):
+        self.model_joint_names = list(self.model.getJointNames()[1:])
+        model_q_index_by_joint_name = {
+            joint_name: 7 + idx for idx, joint_name in enumerate(self.model_joint_names)
+        }
+        self.model_q_index_by_motor_id = {
+            motor_id: model_q_index_by_joint_name[joint_name]
+            for motor_id, joint_name in JOINT_NAMES_ROS.items()
+            if joint_name in model_q_index_by_joint_name
+        }
 
-    def left_hand_pose_ref_callback(self, msg: PoseStamped):
-        self.left_hand_pose_ref = msg
+        missing_core_joints = [
+            joint_name
+            for motor_id, joint_name in JOINT_NAMES_ROS.items()
+            if motor_id in range(G1_NUM_MOTOR)
+            and joint_name not in model_q_index_by_joint_name
+        ]
+        if missing_core_joints:
+            self.get_logger().warn(
+                "Model is missing some G1 motor joints; they will not be commanded: "
+                + ", ".join(missing_core_joints)
+            )
 
-    def start_opensot_callback(self, msg: Bool):
-        self.start_opensot = bool(msg.data)
+    def _initial_model_q(self):
+        q = np.zeros(self.model.nq)
+        q[2] = 0.6756
+        q[6] = 1.0
+
+        motor_q = None
+        if self.use_robot and self.all_motor_q is not None:
+            motor_q = np.asarray(self.all_motor_q, dtype=float)
+
+        initialized_from_lowstate = 0
+        initialized_from_default = 0
+        for motor_id, q_index in self.model_q_index_by_motor_id.items():
+            if motor_q is not None and motor_id < len(motor_q):
+                q[q_index] = float(motor_q[motor_id])
+                initialized_from_lowstate += 1
+            elif motor_id < len(q_init):
+                q[q_index] = float(q_init[motor_id])
+                initialized_from_default += 1
+
+        unmapped_model_joints = len(self.model_joint_names) - len(self.model_q_index_by_motor_id)
+        if motor_q is not None:
+            self.get_logger().info(
+                f"Initialized {initialized_from_lowstate} model joints from LowState motor positions."
+            )
+        if initialized_from_default:
+            self.get_logger().info(
+                f"Initialized {initialized_from_default} model joints from q_init defaults."
+            )
+        if unmapped_model_joints:
+            self.get_logger().warn(
+                f"{unmapped_model_joints} model joints have no G1 motor-index mapping; leaving them at zero."
+            )
+
+        return q
+
+    def _model_q_for_motor(self, motor_id):
+        motor_id = int(motor_id)
+        q_index = self.model_q_index_by_motor_id.get(motor_id)
+        if q_index is None:
+            if motor_id not in self._missing_model_motor_warnings:
+                self._missing_model_motor_warnings.add(motor_id)
+                joint_name = JOINT_NAMES_ROS.get(motor_id, f"motor_{motor_id}")
+                self.get_logger().warn(
+                    f"Skipping command for {joint_name}: joint is not active in the selected model."
+                )
+            return None
+        return float(self.q[q_index])
+
+    def right_hand_goal_callback(self, msg: PoseStamped):
+        self.right_hand_goal = msg
+
+    def left_hand_goal_callback(self, msg: PoseStamped):
+        self.left_hand_goal = msg
+
+    def arms_enabled_callback(self, msg: Bool):
+        self.set_arm_control_enabled(bool(msg.data), ARMS_ENABLED_TOPIC)
+
+    def set_arm_control_enabled(self, enabled, source):
+        self.arms_enabled = enabled
+        state = "enabled" if enabled else "disabled"
+        self.get_logger().info(f"OpenSoT arm control {state} by {source}")
+
+    def arms_home_callback(self, msg: Bool):
+        if not msg.data:
+            return
+        self.reset_hand_goals_to_home()
 
     def emergency_stop_callback(self, msg: Bool):
         self.emergency_stop = bool(msg.data)
+
+    def reset_hand_goals_to_home(self):
+        reset_any = False
+        if self.control_right_arm:
+            reset_any = self.reset_marker_to_home("right_hand_marker", "right") or reset_any
+        if self.control_left_arm:
+            reset_any = self.reset_marker_to_home("left_hand_marker", "left") or reset_any
+        if reset_any:
+            self.interactive_marker_server.applyChanges()
+
+    def reset_marker_to_home(self, marker_name, side):
+        home = self.marker_home_poses.get(marker_name, None)
+        if home is None:
+            self.get_logger().warn(f"Cannot home {side} hand: no marker home pose stored.")
+            return False
+
+        home_goal = deepcopy(home)
+        home_goal.header.stamp = self.get_clock().now().to_msg()
+        self.marker_poses[marker_name] = deepcopy(home_goal)
+
+        if side == "right":
+            self.right_hand_goal = deepcopy(home_goal)
+        elif side == "left":
+            self.left_hand_goal = deepcopy(home_goal)
+
+        self.interactive_marker_server.setPose(marker_name, home_goal.pose, home_goal.header)
+        self.get_logger().info(f"Reset {side} hand goal to home.")
+        return True
 
     def initialize_imarkers(self):
         self.marker_enabled = {}
@@ -282,13 +460,15 @@ class G1CollisionAvoidanceNode(Node):
         # self.get_logger().info(f"Initial base pose:\n{pose_ref}")
         # self.make_6dof_marker("base_marker", pose_ref, "world")
 
-        right_hand_ref = self.right_gripper.getReference()
-        self.get_logger().info(f"Initial right hand pose:\n{right_hand_ref}")
-        self.make_6dof_marker("right_hand_marker", right_hand_ref[0], self.right_hand_frame_ref)
+        if self.control_right_arm:
+            right_hand_ref = self.right_gripper.getReference()
+            self.get_logger().info(f"Initial right hand pose:\n{right_hand_ref}")
+            self.make_6dof_marker("right_hand_marker", right_hand_ref[0], self.right_hand_frame_ref)
 
-        left_hand_ref = self.left_gripper.getReference()
-        self.get_logger().info(f"Initial left hand pose:\n{left_hand_ref}")
-        self.make_6dof_marker("left_hand_marker", left_hand_ref[0], self.left_hand_frame_ref)
+        if self.control_left_arm:
+            left_hand_ref = self.left_gripper.getReference()
+            self.get_logger().info(f"Initial left hand pose:\n{left_hand_ref}")
+            self.make_6dof_marker("left_hand_marker", left_hand_ref[0], self.left_hand_frame_ref)
 
     def make_6dof_marker(self, name, pose, frame_id):
         int_marker = InteractiveMarker()
@@ -359,25 +539,6 @@ class G1CollisionAvoidanceNode(Node):
         menu.apply(self.interactive_marker_server, name)
         self.interactive_marker_server.applyChanges()
 
-        menu.setCheckState(
-            h_enable,
-            MenuHandler.CHECKED if self.marker_enabled.get(name, True) else MenuHandler.UNCHECKED
-        )
-
-        self.menu_handler[name] = menu
-
-        self.menu_entry_ids = getattr(self, "menu_entry_ids", {})
-        self.menu_entry_ids[name] = {"enable": h_enable, "reset": h_reset}
-
-        menu_control = InteractiveMarkerControl()
-        menu_control.interaction_mode = InteractiveMarkerControl.MENU
-        menu_control.name = "menu"
-        int_marker.controls.append(menu_control)
-
-        self.interactive_marker_server.insert(marker=int_marker, feedback_callback=self.process_feedback)
-        menu.apply(self.interactive_marker_server, name)
-        self.interactive_marker_server.applyChanges()
-
     def process_feedback(self, feedback):
         name = feedback.marker_name
         if not self.marker_enabled.get(name, True):
@@ -408,13 +569,8 @@ class G1CollisionAvoidanceNode(Node):
 
 
         elif feedback.menu_entry_id == ids.get("reset"):
-            home = self.marker_home_poses.get(name, None)
-            if home is not None:
-                self.marker_poses[name] = PoseStamped()
-                self.marker_poses[name].header = home.header
-                self.marker_poses[name].pose = home.pose
-
-                self.interactive_marker_server.setPose(name, home.pose, home.header)
+            side = "right" if name.startswith("right_") else "left"
+            if self.reset_marker_to_home(name, side):
                 self.interactive_marker_server.applyChanges()
 
 
@@ -449,11 +605,9 @@ class G1CollisionAvoidanceNode(Node):
 
 
         self.model = xbi.ModelInterface2(self.urdf)
-        
-        self.q = np.zeros(self.model.nq)
-        self.q[2] = 0.6756
-        self.q[6] = 1.0
-        self.q[7: ] = q_init[0:].copy()
+        self._configure_model_joint_mapping()
+
+        self.q = self._initial_model_q()
 
         self.dq = np.zeros(self.model.nv)
 
@@ -510,58 +664,64 @@ class G1CollisionAvoidanceNode(Node):
         self.dqmax = self.model.getVelocityLimits()
         self.dqlims = VelocityLimits(self.model, self.dqmax, self.control_dt)
 
-        # self.collision_avoidance_constraint = None
-        # if self.enable_collision_avoidance:
-        self.get_logger().info("Constraints: Self-Collision Avoidance")
-        self.collision_avoidance_constraint = CollisionAvoidance(
-            self.model, max_pairs=50, collision_urdf=self.urdf)#, collision_srdf=self.urdf)
+        self.collision_avoidance_constraint = None
+        if self.enable_collision_avoidance:
+            if CollisionAvoidance is None:
+                raise RuntimeError(
+                    "enable_collision_avoidance:=true requires pyopensot_collision, "
+                    "but that module is not available."
+                )
 
-        # All arm links and torso now have primitive collision geometries in g1_29dof.urdf.
-        collision_list = {
-            # Left arm vs torso
-            ("left_shoulder_yaw_link", "torso_link"),
-            ("left_elbow_link", "torso_link"),
-            ("left_wrist_roll_link", "torso_link"),
-            ("left_wrist_pitch_link", "torso_link"),
-            ("left_wrist_yaw_link", "torso_link"),
-            ("left_rubber_hand", "torso_link"),
-            # Right arm vs torso
-            ("right_shoulder_yaw_link", "torso_link"),
-            ("right_elbow_link", "torso_link"),
-            ("right_wrist_roll_link", "torso_link"),
-            ("right_wrist_pitch_link", "torso_link"),
-            ("right_wrist_yaw_link", "torso_link"),
-            ("right_rubber_hand", "torso_link"),
-            # hip
-            ("left_rubber_hand", "waist_yaw_link"),
-            ("right_rubber_hand", "waist_yaw_link"),
-            # pelvis
-            ("left_rubber_hand", "pelvis_contour_link"),
-            ("right_rubber_hand", "pelvis_contour_link"),
-            # Left hand vs legs
-            ("left_rubber_hand", "left_hip_pitch_link"),
-            ("left_rubber_hand", "left_hip_roll_link"),
-            ("left_rubber_hand", "left_hip_yaw_link"),
-            ("left_rubber_hand", "left_knee_link"),
-            ("left_rubber_hand", "right_hip_pitch_link"),
-            ("left_rubber_hand", "right_hip_roll_link"),
-            ("left_rubber_hand", "right_hip_yaw_link"),
-            ("left_rubber_hand", "right_knee_link"),
-            # Right hand vs legs
-            ("right_rubber_hand", "left_hip_pitch_link"),
-            ("right_rubber_hand", "left_hip_roll_link"),
-            ("right_rubber_hand", "left_hip_yaw_link"),
-            ("right_rubber_hand", "left_knee_link"),
-            ("right_rubber_hand", "right_hip_pitch_link"),
-            ("right_rubber_hand", "right_hip_roll_link"),
-            ("right_rubber_hand", "right_hip_yaw_link"),
-            ("right_rubber_hand", "right_knee_link"),
-        }
+            self.get_logger().info("Constraints: Self-Collision Avoidance")
+            self.collision_avoidance_constraint = CollisionAvoidance(
+                self.model, max_pairs=50, collision_urdf=self.urdf)#, collision_srdf=self.urdf)
 
-        self.collision_avoidance_constraint.setCollisionList(collision_list)
-        self.collision_avoidance_constraint.setBoundScaling(0.1)
-        self.collision_avoidance_constraint.setLinkPairThreshold(0.01)
-        self.collision_avoidance_constraint.setDetectionThreshold(-1)
+            # All arm links and torso now have primitive collision geometries in g1_29dof.urdf.
+            collision_list = {
+                # Left arm vs torso
+                ("left_shoulder_yaw_link", "torso_link"),
+                ("left_elbow_link", "torso_link"),
+                ("left_wrist_roll_link", "torso_link"),
+                ("left_wrist_pitch_link", "torso_link"),
+                ("left_wrist_yaw_link", "torso_link"),
+                ("left_rubber_hand", "torso_link"),
+                # Right arm vs torso
+                ("right_shoulder_yaw_link", "torso_link"),
+                ("right_elbow_link", "torso_link"),
+                ("right_wrist_roll_link", "torso_link"),
+                ("right_wrist_pitch_link", "torso_link"),
+                ("right_wrist_yaw_link", "torso_link"),
+                ("right_rubber_hand", "torso_link"),
+                # hip
+                ("left_rubber_hand", "waist_yaw_link"),
+                ("right_rubber_hand", "waist_yaw_link"),
+                # pelvis
+                ("left_rubber_hand", "pelvis_contour_link"),
+                ("right_rubber_hand", "pelvis_contour_link"),
+                # Left hand vs legs
+                ("left_rubber_hand", "left_hip_pitch_link"),
+                ("left_rubber_hand", "left_hip_roll_link"),
+                ("left_rubber_hand", "left_hip_yaw_link"),
+                ("left_rubber_hand", "left_knee_link"),
+                ("left_rubber_hand", "right_hip_pitch_link"),
+                ("left_rubber_hand", "right_hip_roll_link"),
+                ("left_rubber_hand", "right_hip_yaw_link"),
+                ("left_rubber_hand", "right_knee_link"),
+                # Right hand vs legs
+                ("right_rubber_hand", "left_hip_pitch_link"),
+                ("right_rubber_hand", "left_hip_roll_link"),
+                ("right_rubber_hand", "left_hip_yaw_link"),
+                ("right_rubber_hand", "left_knee_link"),
+                ("right_rubber_hand", "right_hip_pitch_link"),
+                ("right_rubber_hand", "right_hip_roll_link"),
+                ("right_rubber_hand", "right_hip_yaw_link"),
+                ("right_rubber_hand", "right_knee_link"),
+            }
+
+            self.collision_avoidance_constraint.setCollisionList(collision_list)
+            self.collision_avoidance_constraint.setBoundScaling(0.1)
+            self.collision_avoidance_constraint.setLinkPairThreshold(0.01)
+            self.collision_avoidance_constraint.setDetectionThreshold(-1)
         
 
         # self.com_xy = self.com % [0, 1]
@@ -572,14 +732,24 @@ class G1CollisionAvoidanceNode(Node):
         #     << self.qlims
         #     << self.dqlims
         # )
+        torso_and_hands = self.torso % [3, 4, 5]
+        if self.control_right_arm:
+            torso_and_hands = torso_and_hands + self.right_gripper
+        if self.control_left_arm:
+            torso_and_hands = torso_and_hands + self.left_gripper
+
+        self.get_logger().info(f"OpenSoT arm task selection: {self.arm_controlled}")
+
         self.stack = ((
             self.base#%[0,1,3,4,5]
-            / (self.torso % [3, 4, 5] + self.right_gripper + self.left_gripper)
+            / torso_and_hands
             / self.postural)
             << self.qlims
             << self.dqlims
-            << self.collision_avoidance_constraint
         )
+
+        if self.collision_avoidance_constraint is not None:
+            self.stack = self.stack << self.collision_avoidance_constraint
             
         self.stack.update()
         self.solver = pysot.iHQP(self.stack, eps_regularisation=1e11)
@@ -587,15 +757,43 @@ class G1CollisionAvoidanceNode(Node):
     # ----------------------------
     # Control loop
     # ----------------------------
+    def _send_passive_arm_command(self):
+        if not self.use_robot:
+            return
+        if self.lowcmd_publisher is None or self.msg is None or self.crc is None:
+            return
+
+        wrist_vals = {m.value for m in G1_29_JointWristIndex}
+        for jid in G1_29_JointArmIndex:
+            self.msg.motor_cmd[jid].mode = 0
+            if jid.value in wrist_vals:
+                self.msg.motor_cmd[jid].kp = self.kp_wrist
+                self.msg.motor_cmd[jid].kd = self.kd_wrist
+            else:
+                self.msg.motor_cmd[jid].kp = self.kp_low
+                self.msg.motor_cmd[jid].kd = self.kd_low
+
+            self.msg.motor_cmd[jid].q = float(self.msg.motor_cmd[jid].q)
+
+        self.msg.crc = self.crc.Crc(self.msg)
+        if self.send_cmds_to_robot:
+            self.lowcmd_publisher.Write(self.msg)
+
     def control_loop(self):
+        if self.emergency_stop:
+            self._send_passive_arm_command()
+            return
+
+        if not self.arms_enabled:
+            return
+
         wrist_vals = {m.value for m in G1_29_JointWristIndex}
 
-        if self.start_opensot and not self.emergency_stop:
-            self.model.setJointPosition(self.q)
-            self.model.setJointVelocity(self.dq)
-            self.model.update()
+        self.model.setJointPosition(self.q)
+        self.model.setJointVelocity(self.dq)
+        self.model.update()
 
-            # right hand
+        if self.control_right_arm:
             use_marker_right = self.marker_enabled.get("right_hand_marker", False) and "right_hand_marker" in self.marker_poses
             if use_marker_right:
                 ps = self.marker_poses["right_hand_marker"]
@@ -603,14 +801,14 @@ class G1CollisionAvoidanceNode(Node):
                 T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
                 T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
                 self.right_gripper.setReference(T)
-            elif self.right_hand_pose_ref is not None:
-                ps = self.right_hand_pose_ref
+            elif self.right_hand_goal is not None:
+                ps = self.right_hand_goal
                 T = pyaffine3.Affine3()
                 T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
                 T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
                 self.right_gripper.setReference(T)
 
-            # left hand
+        if self.control_left_arm:
             use_marker_left = self.marker_enabled.get("left_hand_marker", False) and "left_hand_marker" in self.marker_poses
             if use_marker_left:
                 ps = self.marker_poses["left_hand_marker"]
@@ -618,117 +816,119 @@ class G1CollisionAvoidanceNode(Node):
                 T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
                 T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
                 self.left_gripper.setReference(T)
-            elif self.left_hand_pose_ref is not None:
-                ps = self.left_hand_pose_ref
+            elif self.left_hand_goal is not None:
+                ps = self.left_hand_goal
                 T = pyaffine3.Affine3()
                 T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
                 T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
                 self.left_gripper.setReference(T)
 
-            # solve
-            self.stack.update()
-            try:
-                dq = self.solver.solve()
-                self.q = self.model.sum(self.q, dq)
-                self.dq = dq
+        # solve
+        self.stack.update()
+        try:
+            dq = self.solver.solve()
+            self.q = self.model.sum(self.q, dq)
+            self.dq = dq
 
-            except Exception as e:
-                self.get_logger().error(f"OpenSoT Solver Error: {e}")
-                dq = None
+        except Exception as e:
+            self.get_logger().error(f"OpenSoT Solver Error: {e}")
+            dq = None
 
-        
-
-            t = TransformStamped()
-            t.header.frame_id = "world"
-            t.child_frame_id = "pelvis"
-            t.header.stamp = self.get_clock().now().to_msg()
-            t.transform.translation.x = self.q[0]
-            t.transform.translation.y = self.q[1]
-            t.transform.translation.z = self.q[2]
-            t.transform.rotation.x = self.q[3]
-            t.transform.rotation.y = self.q[4]
-            t.transform.rotation.z = self.q[5]
-            t.transform.rotation.w = self.q[6]
-
-            self.base_link_broadcaster.sendTransform(t)
+        if self.publish_pelvis_tf:
+            self._publish_pelvis_tf()
 
 
-            js = JointState()
-            js.header.stamp = self.get_clock().now().to_msg()
+        js = JointState()
+        js.header.stamp = self.get_clock().now().to_msg()
 
 
-            try:
-                js.name = self.model.getJointNames()[1::]
-                js.position = self.q[7:].tolist()
-            except Exception:
-                js.name = []
-                js.position = []
-                self.get_logger().error("Error getting joint names from model")
-            if self.publish_joint_states_opensot:
-                self.joint_state_publisher.publish(js)
+        try:
+            js.name = self.model.getJointNames()[1::]
+            js.position = self.q[7:].tolist()
+        except Exception:
+            js.name = []
+            js.position = []
+            self.get_logger().error("Error getting joint names from model")
+        if self.publish_joint_states_opensot:
+            self.joint_state_publisher.publish(js)
 
-            msg = Float64()
-            msg.data = self.q[2]
+        msg = Float64()
+        msg.data = self.q[2]
 
-            self.base_height_publisher.publish(msg)
+        self.base_height_publisher.publish(msg)
 
-            if not self.use_robot:
-                return
+        if self.collision_avoidance_constraint is not None:
+            self.publishCollisionDistances(
+                self.collision_avoidance_constraint.getOrderedWitnessPointVector(),
+                self.get_clock().now().to_msg(),
+            )
 
-            if self.lowcmd_publisher is None or self.msg is None or self.crc is None:
-                return
+        if not self.use_robot:
+            return
 
-            if self.emergency_stop or not self.motors_on:
-                for jid in G1_29_JointArmIndex:
-                    self.msg.motor_cmd[jid].mode = 0
-                    if jid.value in wrist_vals:
-                        self.msg.motor_cmd[jid].kp = self.kp_wrist
-                        self.msg.motor_cmd[jid].kd = self.kd_wrist
-                    else:
-                        self.msg.motor_cmd[jid].kp = self.kp_low
-                        self.msg.motor_cmd[jid].kd = self.kd_low
+        if self.lowcmd_publisher is None or self.msg is None or self.crc is None:
+            return
 
-                    self.msg.motor_cmd[jid].q = float(self.msg.motor_cmd[jid].q)
+        if not self.motors_on:
+            self._send_passive_arm_command()
+            return
 
-                self.msg.crc = self.crc.Crc(self.msg)
-                if self.send_cmds_to_robot:
-                    self.lowcmd_publisher.Write(self.msg)
-                return
+        for jid in self.controlled_arm_joints:
+            q_cmd = self._model_q_for_motor(jid.value)
+            if q_cmd is None:
+                self.msg.motor_cmd[jid].mode = 0
+                continue
 
-            for jid in G1_29_JointArmIndex:
-                self.msg.mode_machine = self.get_mode_machine() 
-                self.msg.motor_cmd[jid].mode = 1
-                if jid.value in wrist_vals:
-                    self.msg.motor_cmd[jid].kp = self.kp_wrist
-                    self.msg.motor_cmd[jid].kd = self.kd_wrist
-                else:
-                    self.msg.motor_cmd[jid].kp = self.kp_low
-                    self.msg.motor_cmd[jid].kd = self.kd_low
+            self.msg.mode_machine = self.get_mode_machine()
+            self.msg.motor_cmd[jid].mode = 1
+            if jid.value in wrist_vals:
+                self.msg.motor_cmd[jid].kp = self.kp_wrist
+                self.msg.motor_cmd[jid].kd = self.kd_wrist
+            else:
+                self.msg.motor_cmd[jid].kp = self.kp_low
+                self.msg.motor_cmd[jid].kd = self.kd_low
 
-                self.msg.motor_cmd[jid].q = float(self.q[7 + jid.value])
+            self.msg.motor_cmd[jid].q = q_cmd
 
-            for wid in G1_29_JointWaistIndex:
-                self.msg.motor_cmd[wid].mode = 1
-                self.msg.motor_cmd[wid].kp = self.kp_low 
-                self.msg.motor_cmd[wid].kd = self.kd_low
-                self.msg.motor_cmd[wid].dq = 0.0
-                self.msg.motor_cmd[wid].tau = 0.0
+        for wid in G1_29_JointWaistIndex:
+            q_cmd = self._model_q_for_motor(wid.value)
+            if q_cmd is None:
+                self.msg.motor_cmd[wid].mode = 0
+                continue
 
-                self.msg.motor_cmd[wid].q = float(self.q[7 + wid.value])
+            self.msg.motor_cmd[wid].mode = 1
+            self.msg.motor_cmd[wid].kp = self.kp_low
+            self.msg.motor_cmd[wid].kd = self.kd_low
+            self.msg.motor_cmd[wid].dq = 0.0
+            self.msg.motor_cmd[wid].tau = 0.0
 
-            try:
-                self.msg.motor_cmd[G1_29_JointIndex.kNotUsedJoint0].q = 1.0
-            except Exception:
-                pass
+            self.msg.motor_cmd[wid].q = q_cmd
 
-            self.msg.mode_pr = 1
-            self.msg.crc = self.crc.Crc(self.msg)
+        try:
+            self.msg.motor_cmd[G1_29_JointIndex.kNotUsedJoint0].q = 1.0
+        except Exception:
+            pass
 
-            if self.send_cmds_to_robot:
-                self.lowcmd_publisher.Write(self.msg)
+        self.msg.mode_pr = 1
+        self.msg.crc = self.crc.Crc(self.msg)
 
-            # publish self-collision debugging
-            self.publishCollisionDistances(self.collision_avoidance_constraint.getOrderedWitnessPointVector(), self.get_clock().now().to_msg())
+        if self.send_cmds_to_robot:
+            self.lowcmd_publisher.Write(self.msg)
+
+    def _publish_pelvis_tf(self):
+        t = TransformStamped()
+        t.header.frame_id = "world"
+        t.child_frame_id = "pelvis"
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.transform.translation.x = self.q[0]
+        t.transform.translation.y = self.q[1]
+        t.transform.translation.z = self.q[2]
+        t.transform.rotation.x = self.q[3]
+        t.transform.rotation.y = self.q[4]
+        t.transform.rotation.z = self.q[5]
+        t.transform.rotation.w = self.q[6]
+
+        self.tf_broadcaster.sendTransform(t)
 
     def publishCollisionDistances(self, collision_distance_points, time):
         marker = Marker()
@@ -771,10 +971,21 @@ class G1CollisionAvoidanceNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = G1CollisionAvoidanceNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    node = None
+    shutdown_exceptions = (KeyboardInterrupt, ExternalShutdownException)
+    if RCLError is not None:
+        shutdown_exceptions = shutdown_exceptions + (RCLError,)
+
+    try:
+        node = G1CollisionAvoidanceNode()
+        rclpy.spin(node)
+    except shutdown_exceptions:
+        pass
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

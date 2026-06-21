@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.qos import QoSProfile
 from rclpy.node import Node
 from std_msgs.msg import String
-from geometry_msgs.msg import PointStamped
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_
@@ -21,62 +21,117 @@ CLOSE_LEFT_VALUES_2  = [0.04,  0.6,  1.4, -1.2, -1.6, -1.2, -1.4] # closed Hand
 
 OPEN_VALUES          = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
+VALID_ARM_CONTROL_MODES = ("left", "right", "both")
+RIGHT_DX3_ACTION_TOPIC = "/g1pilot/dx3/hand_action/right"
+LEFT_DX3_ACTION_TOPIC = "/g1pilot/dx3/hand_action/left"
+RIGHT_DX3_MOTOR_STATE_TOPIC = "/g1pilot/dx3/right/motor_state"
+LEFT_DX3_MOTOR_STATE_TOPIC = "/g1pilot/dx3/left/motor_state"
+
+def normalize_arm_controlled(arm_controlled):
+    arm_controlled = arm_controlled.strip().lower()
+    if arm_controlled not in VALID_ARM_CONTROL_MODES:
+        raise ValueError(
+            "arm_controlled must be one of: left, right, both "
+            f"(got {arm_controlled!r})"
+        )
+    return arm_controlled
+
+def normalize_hand_action(action):
+    action = action.strip().lower().replace("-", "_")
+    if action not in ("open", "pinch", "close"):
+        raise ValueError(
+            "DX3 hand action must be one of: open, pinch, close "
+            f"(got {action!r})"
+        )
+    return action
+
+def dx3_target(side, action):
+    if action == "open":
+        return OPEN_VALUES
+    if side == "right":
+        return CLOSE_RIGHT_VALUES_1 if action == "pinch" else CLOSE_RIGHT_VALUES_2
+    return CLOSE_LEFT_VALUES_1 if action == "pinch" else CLOSE_LEFT_VALUES_2
+
 class DX3Controller(Node):
     def __init__(self):
         super().__init__('dx3_hand_controller')
         self.declare_parameter("interface", "")
         self.declare_parameter("arm_controlled", "both")
+        self.declare_parameter("use_robot", True)
+        self.declare_parameter("send_commands", True)
         interface = self.get_parameter("interface").get_parameter_value().string_value
-        arm_controlled = self.get_parameter("arm_controlled").get_parameter_value().string_value
-        self.left_gripper_state_publisher = self.create_publisher(MotorStateList, 'g1pilot/dx3/left/motor_state', QoSProfile(depth=10))
-        self.right_gripper_state_publisher = self.create_publisher(MotorStateList, 'g1pilot/dx3/right/motor_state', QoSProfile(depth=10))
+        arm_controlled = normalize_arm_controlled(
+            self.get_parameter("arm_controlled").get_parameter_value().string_value
+        )
+        self.use_robot = bool(self.get_parameter("use_robot").value)
+        self.send_commands = bool(self.get_parameter("send_commands").value) and self.use_robot
+        self.left_gripper_state_publisher = self.create_publisher(
+            MotorStateList, LEFT_DX3_MOTOR_STATE_TOPIC, QoSProfile(depth=10)
+        )
+        self.right_gripper_state_publisher = self.create_publisher(
+            MotorStateList, RIGHT_DX3_MOTOR_STATE_TOPIC, QoSProfile(depth=10)
+        )
 
         self.right_action = None
         self.left_action = None
         self.right_target = OPEN_VALUES
         self.left_target = OPEN_VALUES
         self.total_motors = 7
-        self.send_commands = True
 
-        ChannelFactoryInitialize(0, interface)
+        if self.use_robot and not interface:
+            raise RuntimeError("interface is required when use_robot:=true")
 
         if arm_controlled in ["right", "both"]:
-            self.right_pub = ChannelPublisher("rt/dex3/right/cmd", HandCmd_)
-            self.right_pub.Init()
-            self.right_sub = ChannelSubscriber("rt/dex3/right/state", HandState_)
-            self.right_sub.Init(self.right_callback)
-            self.create_subscription(PointStamped, "/g1pilot/right_hand/dx3/action", self.right_action_callback, 10)
+            self.create_subscription(String, RIGHT_DX3_ACTION_TOPIC, self.right_action_callback, 10)
 
         if arm_controlled in ["left", "both"]:
-            self.left_pub = ChannelPublisher("rt/dex3/left/cmd", HandCmd_)
-            self.left_pub.Init()
-            self.left_sub = ChannelSubscriber("rt/dex3/left/state", HandState_)
-            self.left_sub.Init(self.left_callback)
-            self.create_subscription(PointStamped, "/g1pilot/left_hand/dx3/action", self.left_action_callback, 10)
+            self.create_subscription(String, LEFT_DX3_ACTION_TOPIC, self.left_action_callback, 10)
+
+        if self.use_robot:
+            self.get_logger().info("use_robot:=true -> Initializing Unitree DX3 hand DDS interface")
+            ChannelFactoryInitialize(0, interface)
+            self.initialize_hand_interfaces(arm_controlled)
+        else:
+            self.get_logger().info("use_robot:=false -> Not connecting to Unitree DX3 hand DDS interface.")
 
         self.create_timer(0.05, self.publish_commands)
 
-    def right_action_callback(self, msg: PointStamped):
-        if msg.point.x < -0.5:
-            self.right_action = "close_1"
-            self.right_target = CLOSE_RIGHT_VALUES_1
-        elif msg.point.x > 0.5:
-            self.right_action = "open"
-            self.right_target = OPEN_VALUES
-        else:
-            self.right_action = "close_2"
-            self.right_target = CLOSE_RIGHT_VALUES_2
+    def initialize_hand_interfaces(self, arm_controlled):
+        if arm_controlled in ["right", "both"]:
+            if self.send_commands:
+                self.right_pub = ChannelPublisher("rt/dex3/right/cmd", HandCmd_)
+                self.right_pub.Init()
+            self.right_sub = ChannelSubscriber("rt/dex3/right/state", HandState_)
+            self.right_sub.Init(self.right_callback)
 
-    def left_action_callback(self, msg: PointStamped):
-        if msg.point.x < -0.5:
-            self.left_action = "close_1"
-            self.left_target = CLOSE_LEFT_VALUES_1
-        elif msg.point.x > 0.5:
-            self.left_action = "open"
-            self.left_target = OPEN_VALUES
+        if arm_controlled in ["left", "both"]:
+            if self.send_commands:
+                self.left_pub = ChannelPublisher("rt/dex3/left/cmd", HandCmd_)
+                self.left_pub.Init()
+            self.left_sub = ChannelSubscriber("rt/dex3/left/state", HandState_)
+            self.left_sub.Init(self.left_callback)
+
+    def right_action_callback(self, msg: String):
+        self._set_hand_action("right", msg.data)
+
+    def left_action_callback(self, msg: String):
+        self._set_hand_action("left", msg.data)
+
+    def _set_hand_action(self, side, action):
+        try:
+            normalized_action = normalize_hand_action(action)
+        except ValueError as exc:
+            self.get_logger().warn(str(exc))
+            return
+
+        if side == "right":
+            self.right_action = normalized_action
+            self.right_target = dx3_target(side, normalized_action)
         else:
-            self.left_action = "close_2"
-            self.left_target = CLOSE_LEFT_VALUES_2
+            self.left_action = normalized_action
+            self.left_target = dx3_target(side, normalized_action)
+
+        self.get_logger().info(f"DX3 {side} hand action: {normalized_action}")
 
     def left_callback(self, msg: HandState_):
         motor_list_msg = MotorStateList()
@@ -136,9 +191,14 @@ class DX3Controller(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = DX3Controller()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

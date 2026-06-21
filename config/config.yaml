@@ -70,9 +70,9 @@ workspace:
 
 robot:
   model: 29dof #29dof_dex3
-  left_eff_topic: /g1pilot/left_hand_goal
+  left_eff_topic: /g1pilot/hand_goal/left
   left_tf_frame: left_hand_point_contact
-  right_eff_topic: /g1pilot/right_hand_goal
+  right_eff_topic: /g1pilot/hand_goal/right
   right_tf_frame: right_hand_point_contact
   start_topic: /g1pilot/start
   balance_topic: /g1pilot/balance
@@ -80,7 +80,7 @@ robot:
 
 state:
   imu_topic: /g1pilot/imu
-  imu_link: imu_link
+  imu_link: imu_in_pelvis
   motors_topic: /g1pilot/motor_state
   odom_topic: /g1pilot/odom
   voice_topic: /g1pilot/voice
@@ -96,10 +96,10 @@ dex3:
   send_commands: true
   right_cmd_topic: rt/dex3/right/cmd
   right_state_topic: rt/dex3/right/state
-  right_hand_topic: /g1pilot/dx3/right/hand_action
+  right_hand_topic: /g1pilot/dx3/hand_action/right
   left_cmd_topic: rt/dex3/left/cmd
   left_state_topic: rt/dex3/left/state
-  left_hand_topic: /g1pilot/dx3/left/hand_action
+  left_hand_topic: /g1pilot/dx3/hand_action/left
 
 manipulation:
   right_point_topic: /g1pilot/right_point_goal
@@ -120,7 +120,7 @@ navigation:
   goal_start_topic: /g1pilot/goal/start
   path_topic: /g1pilot/path
   manual_topic: /g1pilot/joy_manual
-  autonomous_topic: /g1pilot/joy_autonomous
+  autonomous_topic: /g1pilot/auto_joy
   autonomous_enabled_topic: /g1pilot/auto_enable
   vx_limit: 0.6
   vy_limit: 0.6

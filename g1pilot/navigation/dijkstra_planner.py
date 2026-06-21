@@ -8,6 +8,8 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from geometry_msgs.msg import PointStamped, PoseStamped
 from std_msgs.msg import Header
 
+UNKNOWN_OCCUPANCY_SENTINEL = 255
+
 def _dist(a,b):
     dx=a[0]-b[0]; dy=a[1]-b[1]
     return math.hypot(dx,dy)
@@ -62,6 +64,8 @@ class DijkstraPlanner(Node):
         self.sub_odom=self.create_subscription(Odometry,self.get_parameter('odom_topic').value,self.cb_odom,qos)
         self.sub_goal=self.create_subscription(PoseStamped,self.get_parameter('goal_topic').value,self.cb_goal,qos)
         self.pub_path=self.create_publisher(Path,self.get_parameter('path_topic').value,qos)
+        self.occ_threshold=int(self.get_parameter('occ_threshold').value)
+        self.inflation_radius_m=float(self.get_parameter('inflation_radius_m').value)
         self.map=None
         self.map_frame='map'
         self.res=self.ox=self.oy=0.0
@@ -80,8 +84,8 @@ class DijkstraPlanner(Node):
         self.w=int(msg.info.width)
         self.h=int(msg.info.height)
         self.occ=list(msg.data)
-        self.inf_radius_cells=int(math.ceil(0.40/self.res)) if self.res>0.0 else 0
-        self.occ_inf=self.inflate_occupancy(self.occ,self.w,self.h,self.inf_radius_cells,50)
+        self.inf_radius_cells=int(math.ceil(self.inflation_radius_m/self.res)) if self.res>0.0 else 0
+        self.occ_inf=self.inflate_occupancy(self.occ,self.w,self.h,self.inf_radius_cells,self.occ_threshold)
 
     def cb_odom(self,msg):
         self.px=float(msg.pose.pose.position.x)
@@ -98,17 +102,17 @@ class DijkstraPlanner(Node):
             return
         gx=float(msg.pose.position.x); gy=float(msg.pose.position.y)
         if self.map is None:
-            self.publish_path(self.line_points(self.px,self.py,gx,gy,msg.header.frame_id or 'map'),msg.header.frame_id or 'map')
+            self.reject_goal("No map available; refusing to publish an unverified straight-line path.",msg.header.frame_id or 'map')
             return
         sx,sy=self.world_to_grid(self.px,self.py)
         gx_i,gy_i=self.world_to_grid(gx,gy)
         if not self.in_bounds(sx,sy) or not self.in_bounds(gx_i,gy_i):
-            self.publish_path(self.line_points(self.px,self.py,gx,gy,self.map_frame),self.map_frame); return
+            self.reject_goal("Start or goal is outside the map; clearing path.",self.map_frame); return
         if self.is_occ(sx,sy) or self.is_occ(gx_i,gy_i):
-            self.publish_path(self.line_points(self.px,self.py,gx,gy,self.map_frame),self.map_frame); return
+            self.reject_goal("Start or goal is occupied/unknown; clearing path.",self.map_frame); return
         path_idx=self.dijkstra((sx,sy,self.pyaw),(gx_i,gy_i))
         if not path_idx:
-            self.publish_path(self.line_points(self.px,self.py,gx,gy,self.map_frame),self.map_frame); return
+            self.reject_goal("No collision-free path found; clearing path.",self.map_frame); return
         pts=[self.grid_to_world(ix,iy) for ix,iy in path_idx]
         pts=self.simplify_spacing(pts,0.02)
         pts=self.shortcut_path(pts)
@@ -120,9 +124,13 @@ class DijkstraPlanner(Node):
     def grid_to_world(self,ix,iy):
         return self.ox+(ix+0.5)*self.res, self.oy+(iy+0.5)*self.res
     def in_bounds(self,ix,iy): return 0<=ix<self.w and 0<=iy<self.h
+    def is_unknown_value(self,v):
+        return v < 0 or v == UNKNOWN_OCCUPANCY_SENTINEL
+    def is_occupied_value(self,v,occ_th):
+        return not self.is_unknown_value(v) and v>=occ_th
     def is_occ(self,ix,iy):
         v=self.occ_inf[iy*self.w+ix]
-        return v>=50 and v!=255
+        return self.is_unknown_value(v) or self.is_occupied_value(v,self.occ_threshold)
 
     def neighbors(self,ix,iy):
         n=[(-1,0,1.0),(1,0,1.0),(0,-1,1.0),(0,1,1.0)]
@@ -186,6 +194,10 @@ class DijkstraPlanner(Node):
             path.poses.append(p)
         self.pub_path.publish(path)
 
+    def reject_goal(self,reason,frame_id):
+        self.get_logger().warn(reason)
+        self.publish_path([],frame_id)
+
     def line_points(self,sx,sy,gx,gy,frame_id):
         pts=[]
         for i in range(50+1):
@@ -197,7 +209,10 @@ class DijkstraPlanner(Node):
     def inflate_occupancy(self,occ,w,h,r_cells,occ_th):
         if r_cells<=0: return occ[:]
         inflated=[0]*(w*h)
-        occ_cells=[(i%w,i//w) for i,v in enumerate(occ) if v>=occ_th and v!=255]
+        for i,v in enumerate(occ):
+            if self.is_unknown_value(v):
+                inflated[i]=v
+        occ_cells=[(i%w,i//w) for i,v in enumerate(occ) if self.is_occupied_value(v,occ_th)]
         for ox,oy in occ_cells:
             xmin=max(0,ox-r_cells); xmax=min(w-1,ox+r_cells)
             ymin=max(0,oy-r_cells); ymax=min(h-1,oy+r_cells)
@@ -208,9 +223,9 @@ class DijkstraPlanner(Node):
                 for x in range(xmin,xmax+1):
                     dx=x-ox
                     if dx*dx+dy2<=r2:
-                        inflated[base+x]=max(inflated[base+x],100)
-        for i,v in enumerate(occ):
-            if v==255: inflated[i]=255
+                        idx=base+x
+                        if not self.is_unknown_value(inflated[idx]):
+                            inflated[idx]=max(inflated[idx],100)
         return inflated
 
     def simplify_spacing(self,pts,min_d):
