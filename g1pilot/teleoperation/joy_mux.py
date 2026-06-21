@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import math, time
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from nav_msgs.msg import Odometry, Path
@@ -148,11 +149,12 @@ def main(args=None):
     n=JoyMux()
     try:
         rclpy.spin(n)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         n.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__=='__main__':
     main()

@@ -50,7 +50,7 @@ RUN git clone https://github.com/humanoid-path-planner/hpp-fcl.git && \
 
 ## PINOCCHIO
 WORKDIR /home/forest_ws/src
-RUN git clone -b devel https://github.com/stack-of-tasks/pinocchio.git && \
+RUN git clone -b v3.9.0 https://github.com/stack-of-tasks/pinocchio.git && \
     cd /home/forest_ws/src/pinocchio && \
     git submodule init && \
     git submodule update && \
@@ -70,7 +70,7 @@ RUN git clone -b devel https://github.com/ADVRHumanoids/xbot2_interface.git && \
     cd /home/forest_ws/build/xbot2_interface && \
     source /opt/ros/jazzy/setup.bash && \
     source /home/forest_ws/setup.bash && \
-    cmake -DXBOT2_IFC_BUILD_TESTS=ON -DXBOT2_IFC_BUILD_ROS=OFF -DXBOT2_IFC_BUILD_ROS2=OFF -DCMAKE_INSTALL_PREFIX:STRING=/home/forest_ws/install -DCMAKE_BUILD_TYPE:STRING=Release ../../src/xbot2_interface && \
+    cmake -DXBOT2_IFC_BUILD_TESTS=ON -DXBOT2_IFC_BUILD_ROS=OFF -DXBOT2_IFC_BUILD_ROS2=OFF -DBoost_USE_DEBUG_RUNTIME=OFF -DCMAKE_INSTALL_PREFIX:STRING=/home/forest_ws/install -DCMAKE_BUILD_TYPE:STRING=Release ../../src/xbot2_interface && \
     make -j8 && \
     make install
 
@@ -183,7 +183,7 @@ RUN apt-get update && apt-get install -yy \
     libhidapi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install pyspacemouse torch pyyaml onnxruntime
+RUN pip install pyspacemouse pyyaml onnxruntime
 
 # MuJoCo
 RUN git clone https://github.com/deepmind/mujoco.git && \
@@ -218,6 +218,8 @@ RUN git clone https://github.com/ros2/rmw_cyclonedds -b ${ROS_DISTRO} && \
     cd ../ && \
     /home/.base/bin/python3 -m colcon build --packages-up-to cyclonedds
 
+RUN rm -f /home/.base/bin/register-python-argcomplete || true
+
 RUN git clone https://github.com/unitreerobotics/unitree_ros2 && \
     mv unitree_ros2/cyclonedds_ws/src/unitree /ros2_ws/src && \
     rm -rf unitree_ros2
@@ -250,9 +252,9 @@ RUN echo "export LD_LIBRARY_PATH=/usr/local/lib:\$LD_LIBRARY_PATH" >> /root/.bas
 RUN echo "export ROS_DOMAIN_ID=1" >> /root/.bashrc
 
 # Also install in the venv, because rosidl_adapter may run with /home/.base/bin/python3
-RUN /home/.base/bin/pip install -U pip setuptools wheel && \
-    /home/.base/bin/pip install empy lark catkin_pkg mujoco robot_descriptions playground pyqt6 && \
-    /home/.base/bin/pip install pygame numpy pin meshcat placo pin-pink pyspacemouse && \
+RUN /home/.base/bin/pip install -U pip "setuptools<80" wheel && \
+    /home/.base/bin/pip install empy lark catkin_pkg mujoco robot_descriptions pyqt6 && \
+    /home/.base/bin/pip install pygame "numpy==1.26.4" meshcat pyspacemouse && \
     /home/.base/bin/pip install git+https://github.com/bglopez/python-easyhid.git && \
     /home/.base/bin/pip install hidapi scipy matplotlib
 
@@ -265,7 +267,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-catkin-pkg \
  && rm -rf /var/lib/apt/lists/*
 
-RUN /home/.base/bin/pip install -U pip setuptools wheel && \
+RUN /home/.base/bin/pip install -U pip "setuptools<80" wheel && \
     /home/.base/bin/pip install -U colcon-common-extensions && \
     /home/.base/bin/pip install hidapi pyspacemouse
 
@@ -329,7 +331,8 @@ WORKDIR /
 RUN git clone https://github.com/lnotspotl/unitree_sdk2_python.git \
  && cd unitree_sdk2_python \
  && git checkout 7c661d27f4ae064ffd0dd633fd9d5b518ef0b508 \
- && /home/.base/bin/pip install -e .
+ && /home/.base/bin/pip install "numpy==1.26.4" "opencv-python<4.12" "cyclonedds==0.10.2" rich-click \
+ && /home/.base/bin/pip install --no-deps -e .
 
 WORKDIR /ros2_ws/src
 RUN git clone https://github.com/Livox-SDK/livox_ros_driver2.git /ros2_ws/src/livox_ros_driver2
@@ -366,9 +369,9 @@ RUN rm -rf /ros2_ws/src/unitree_ros2/cyclonedds_ws/src/unitree
 
 WORKDIR /ros2_ws
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
-    /home/.base/bin/python3 -m colcon build --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
+    /home/.base/bin/python3 -m colcon build --cmake-args -DROS_EDITION=ROS2 -DDISTRO_ROS=${ROS_DISTRO}
 
-RUN pip install pyqt6 pin meshcat evdev
+RUN pip install pyqt6 meshcat evdev
 RUN apt-get update && apt-get install -y \
     libxkbcommon-x11-0 \
     libxcb-cursor0 \
@@ -392,7 +395,7 @@ RUN apt-get update && apt-get upgrade -y
 RUN apt install -y python3-gi gstreamer1.0-tools \
   gstreamer1.0-plugins-* gstreamer1.0-libav
 
-RUN pip install --upgrade pyrealsense2 numpy opencv-python
+RUN pip install --upgrade pyrealsense2 "numpy==1.26.4" "opencv-python<4.12"
 
 ##### MOLA packages
 RUN apt install -y \
@@ -400,10 +403,10 @@ RUN apt install -y \
  ros-${ROS_DISTRO}-mola-state-estimation \
  ros-${ROS_DISTRO}-mola-lidar-odometry
 
-RUN pip install placo
+### Placo is not used by this repo currently. Add it later if a placo workflow needs it.
 
-RUN python3 -m pip install --no-cache-dir -U pip setuptools wheel && \
-    python3 -m pip install --no-cache-dir cyclonedds
+RUN /home/.base/bin/python3 -m pip install --no-cache-dir -U pip "setuptools<80" wheel && \
+    /home/.base/bin/python3 -m pip install --no-cache-dir cyclonedds
 RUN /home/.base/bin/pip install --no-cache-dir cyclonedds
 
 ENV CRC_SRC=/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_amd64.so
@@ -422,5 +425,8 @@ RUN echo "source /home/.base/bin/activate" >> /root/.bashrc
 RUN rm -f /home/.base/bin/register-python-argcomplete || true
 
 RUN echo "export LD_LIBRARY_PATH=/usr/local/lib:\$LD_LIBRARY_PATH" >> /root/.bashrc
+
+ENV LD_LIBRARY_PATH=/usr/local/lib
+RUN PYTHONPATH= /home/.base/bin/python3 -m pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
 
 CMD ["bash"]

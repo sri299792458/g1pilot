@@ -5,6 +5,7 @@ import os
 import json
 import threading
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool, String, Float64
 from sensor_msgs.msg import Joy
@@ -137,7 +138,8 @@ class G1LocoClient(Node):
 
     def base_height_callback(self, msg: Float64):
         # self.get_logger().warning(f"Received base height command: {msg.data}")
-        self.robot.SetStandHeight(msg.data)
+        if self.use_robot and self.robot is not None:
+            self.robot.SetStandHeight(msg.data)
 
     def start_callback(self, msg: Bool):
         if self.use_robot and self.robot is not None and msg.data:
@@ -289,11 +291,12 @@ def main(args=None):
     node = G1LocoClient()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,6 @@
 import math
 import numpy as np
-import pinocchio as pin
+from scipy.spatial.transform import Rotation
 
 from g1pilot.utils.joints_names import JOINT_LIMITS_RAD
 
@@ -12,13 +12,12 @@ def wrap_to_pi(a):
     return a
 
 def mat_to_quat_wxyz(R):
-    q = pin.Quaternion(R)
-    return np.array([q.w, q.x, q.y, q.z], dtype=float)
+    q_xyzw = Rotation.from_matrix(R).as_quat()
+    return np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]], dtype=float)
 
 def quat_wxyz_to_matrix(qwxyz):
     w, x, y, z = qwxyz
-    q = pin.Quaternion(w, x, y, z)
-    return q.matrix()
+    return Rotation.from_quat([x, y, z, w]).as_matrix()
 
 def quat_hemisphere(q0, q1):
     if np.dot(q0, q1) < 0.0:
