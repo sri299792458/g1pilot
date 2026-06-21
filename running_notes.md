@@ -177,6 +177,8 @@ Status as of the fork setup discussion:
 - `origin` points to the personal fork.
 - `upstream` points to `hucebot/g1pilot`.
 - The local push URL for `upstream` is disabled to avoid accidental upstream pushes.
+- `dev` has been pushed to `origin/dev`.
+- Current setup commit on `dev`: `8db113e` (`Prepare G1Pilot dry-run setup`).
 
 Recommended lab workflow:
 
