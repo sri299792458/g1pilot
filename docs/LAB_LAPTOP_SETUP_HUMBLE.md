@@ -84,7 +84,8 @@ This builds or installs, under `~/g1pilot_ws/deps`, the Docker-equivalent heavy 
 - OSQP, proxsuite, FCL `v0.6.0`, qpSWIFT.
 - OpenSoT.
 - Livox SDK2 and `livox_ros_driver2`.
-- Python RealSense package.
+- Python RealSense package for direct USB/local RealSense utilities.
+- Unitree TeleImager client. See "G1 Camera Note" below for the robot-side service.
 
 The script defaults to `JOBS=4` to avoid overloading the laptop during CMake builds. Override it explicitly when appropriate:
 
@@ -98,7 +99,41 @@ Useful troubleshooting options:
 scripts/setup_humble_user_workspace.sh --skip-opensot
 scripts/setup_humble_user_workspace.sh --skip-livox
 scripts/setup_humble_user_workspace.sh --skip-realsense-python
+scripts/setup_humble_user_workspace.sh --skip-teleimager-client
 ```
+
+## G1 Camera Note
+
+For the official Unitree image-stream path, run TeleImager on the robot development computer (usually `192.168.123.164`) and connect to it from the laptop.
+
+On this lab G1, TeleImager is already present at `~/teleimager` in the `teleimager` conda environment. If another robot image does not have it, clone `https://github.com/unitreerobotics/teleimager.git` on PC2 and install the server extras in the robot-side Python environment:
+
+```bash
+git clone https://github.com/unitreerobotics/teleimager.git
+cd teleimager
+pip install -e ".[server]"
+```
+
+Start the RealSense-backed image service on PC2:
+
+```bash
+conda activate teleimager
+cd ~/teleimager
+teleimager-server --cf --rs
+teleimager-server --rs
+```
+
+The lab G1 D435i was validated with serial `348522074178` and `640x480x30`, which corresponds to `image_shape: [480, 640]` in TeleImager's `cam_config_server.yaml`.
+
+From the laptop, use the verified Python client:
+
+```bash
+teleimager-client --host 192.168.123.164
+```
+
+The WebRTC preview may also be exposed at `https://192.168.123.164:60001`, but the Python client is the path validated during the lab setup.
+
+TeleImager streams camera images over ZMQ/WebRTC. If RViz needs a ROS `PointCloud2` depth cloud, run a ROS RealSense wrapper on the robot computer that is physically connected to the camera.
 
 ## 3. Build
 
@@ -174,4 +209,4 @@ Offline launches should use:
 use_robot:=false
 ```
 
-The lab G1 `mode_machine` still needs to be identified before making the locked-waist URDF the default. See `running_notes.md` for the current TODO.
+The lab G1 reported `mode_machine=5` on `enp134s0`, but its waist roll/pitch joints are physically locked and waist yaw remains free. Set the Unitree-side waist configuration to locked-waist / 1-DOF mode if available, then use a locked-waist URDF in this stack: yaw stays active, roll/pitch must be fixed and uncommanded. See `running_notes.md` for the current validation follow-up.

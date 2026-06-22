@@ -154,11 +154,6 @@ ros2 launch g1pilot manipulation_launcher.launch.py
 ros2 launch g1pilot teleoperation_launcher.launch.py
 ```
 
-6.- You can run the depth camera on the robot with the following command:
-```bash
-ros2 launch realsense2_camera rs_launch.py depth_module.depth_profile:=1280x720x30 pointcloud.enable:=true
-```
-
 For more details on how to use the package, please refer to the [instructions](docs/INSTRUCTIONS.md) document. Also you can check the [cheats](docs/CHEATS.md) document for quick commands and tips to use the package.
 
 ## Contributing

@@ -702,27 +702,48 @@ Issue 18 fixed: local LiDAR URDF mount did not match official Unitree G1 `rev_1_
   - Local `livox_joint` origins, where present, are identity transforms from `mid360_link` to `livox_frame`.
   - `git diff --check -- description_files/urdf/g1_29dof.urdf description_files/urdf/g1_29dof_dx3.urdf description_files/urdf/g1_29dof_upperbody.urdf description_files/urdf/g1_29dof_dx3_upperbody.urdf` succeeds.
 
-TODO: live robot LiDAR/TF validation.
+Live robot LiDAR/TF validation, 2026-06-21:
 
-- Plug into the G1/Livox network and run the robot-state + Livox stack.
-- Confirm TF numerically:
-  - `ros2 run tf2_ros tf2_echo torso_link livox_frame`
-  - Expected transform includes the official `mid360_joint` pose:
-    - z about `0.428434`
-    - roll about `pi`
-    - pitch about `0.0511 rad`
-- Confirm visually in RViz:
-  - Fixed frame: `pelvis` or `torso_link`
-  - Add `/livox/lidar` as `PointCloud2`
-  - Floor should appear below the robot.
-  - Walls/vertical objects should look vertical.
-  - A hand moved in front of the LiDAR should appear in front of the robot, not behind or upside down.
-- Best repeatable check:
-  - Record `/livox/lidar`, `/tf`, and `/tf_static` once with `ros2 bag record`.
-  - Replay the same bag against old vs new URDF TFs to compare the correction without repeatedly touching the robot.
-- Caveat:
-  - MOLA currently defaults `ignore_lidar_pose_from_tf:=true`, so this validates URDF/RViz/TF first.
-  - MOLA LiDAR extrinsics need a separate navigation pass.
+- Laptop/G1/Livox network:
+  - Laptop Ethernet IP: `192.168.123.99`
+  - G1 controller reachable at `192.168.123.161`
+  - Livox Mid360 reachable at `192.168.123.120`
+- `config/livox_mid.json` was updated so the Livox host IP fields match this laptop (`192.168.123.99`).
+- Livox driver launches cleanly and publishes `/livox/lidar` as `sensor_msgs/msg/PointCloud2` with `frame_id: livox_frame`.
+- Numeric TF confirmed:
+  - Command: `ros2 run tf2_ros tf2_echo torso_link livox_frame`
+  - Observed:
+    - translation `[0.000, 0.000, 0.428]`
+    - RPY radians `[3.142, 0.051, 0.000]`
+    - RPY degrees `[180.000, 2.929, 0.000]`
+  - This matches the expected official `mid360_joint` pose (`z` about `0.428434`, roll about `pi`, pitch about `0.0511 rad`).
+- RViz note:
+  - If `robot_state_publisher` is launched by itself, fixed links like `livox_frame` are OK but movable links show RobotModel transform errors.
+  - Starting `g1pilot robot_state` with `publish_joint_states:=true` publishes `/joint_states` and restores dynamic `/tf` for the full model.
+  - `config/29dof.rviz` now keeps the Livox display readable by default:
+    - `Color Transformer: AxisColor`
+    - `Axis: Z`
+    - `Style: Flat Squares`
+    - `Size (m): 0.02`
+    - `Decay Time: 1`
+  - RViz uses `Size (m)` for `Flat Squares`; `Size (Pixels)` only applies to `Style: Points`.
+- Repeatable replay bag captured:
+  - `/home/kanth042/g1pilot_ws/bags/livox_tf_live_20260621_212824`
+  - Contains `/livox/lidar` (99 messages), `/tf` (195 messages), and `/tf_static` (1 message).
+
+Remaining visual RViz check:
+
+- Fixed frame: `pelvis` or `torso_link`
+- Add `/livox/lidar` as `PointCloud2`
+- Floor should appear below the robot.
+- Walls/vertical objects should look vertical.
+- A hand moved in front of the LiDAR should appear in front of the robot, not behind or upside down.
+
+Replay/caveat:
+
+- Replay the captured bag against old vs new URDF TFs to compare the correction without repeatedly touching the robot.
+- MOLA currently defaults `ignore_lidar_pose_from_tf:=true`, so this validates URDF/RViz/TF first.
+- MOLA LiDAR extrinsics need a separate navigation pass.
 
 Issue 19 fixed: `g1_29dof_dx3.urdf` had a duplicate `pelvis_contour_joint`.
 
@@ -845,34 +866,53 @@ Issue 23 fixed: OpenSoT emergency-stop branch was unreachable.
   - `python3 -m py_compile g1pilot/manipulation/opensot_solver.py` succeeds.
   - `git diff --check -- g1pilot/manipulation/opensot_solver.py` succeeds.
 
-TODO: identify the lab G1 `mode_machine` before finalizing URDF and waist control.
+TODO update: lab G1 waist configuration identified before finalizing URDF and waist control.
 
 - Goal:
-  - Determine the actual Unitree machine type for the lab G1 before choosing the default robot model.
-- How to check:
+  - Choose the robot model and waist command policy from both the reported Unitree machine type and the actual physical waist configuration.
+- Result:
+  - On the lab laptop connected over Ethernet (`enp134s0`, `192.168.123.99/24`), the robot responded at `192.168.123.161`.
+  - Direct read of `rt/lowstate.mode_machine` returned:
+    - `5`
+  - The user confirmed the lab G1 has physically locked waist roll/pitch.
+  - Waist yaw remains unlocked, as expected for G1 locked-waist / 1-DOF waist operation.
+- Other ways to check:
   - Unitree app:
     - `Device -> Data -> Robot -> Machine Type`
-  - ROS/DDS:
+  - Unitree lowstate:
     - read `rt/lowstate.mode_machine`
     - `opensot_solver.py` already reads this field through `get_mode_machine()`
 - Why it matters:
   - Unitree publishes different G1 URDFs for different `mode_machine` IDs.
-  - The official reference repo has locked-waist variants for IDs such as:
+  - The official Unitree `unitree_ros/robots/g1_description` README maps mode `5` to:
+    - `g1_29dof_rev_1_0`
+    - `g1_29dof_with_hand_rev_1_0`
+    - `g1_29dof_rev_1_0_with_inspire_hand_DFQ`
+    - `g1_29dof_rev_1_0_with_inspire_hand_FTP`
+  - The locked-waist rev 1.0 variant is mode `6`, not mode `5`.
+  - In the official locked-waist URDF:
+    - `waist_yaw_joint` remains `revolute`.
+    - `waist_roll_joint` is `fixed`.
+    - `waist_pitch_joint` is `fixed`.
+    - The movable joint count drops from 29 to 27.
+  - The official reference repo also has newer locked-waist variants for IDs such as:
     - `6`
     - `12`
     - `14`
     - `16`
   - The current local g1pilot URDF set does not yet include these locked-waist variants.
-- Expected code follow-up once the ID is known:
+- Revised code follow-up:
+  - Set the Unitree-side waist configuration to locked-waist / 1-DOF mode in Unitree Explore if available, then re-check `mode_machine`.
+  - Use the locked-waist URDF for this lab robot because the physical roll/pitch waist joints are locked, even if the reported machine type remains `5`.
   - Add the matching official locked-waist URDF variant to `description_files/urdf`.
   - Reapply this repo's integration helper frames:
     - `livox_frame`
     - `left_hand_point_contact`
     - `right_hand_point_contact`
-  - Add it to the allowed `urdf_file` launch choices.
-  - Add a launch/runtime validation so selected URDF and live `lowstate.mode_machine` cannot silently mismatch.
+  - Add launch/runtime validation so selected URDF, live `lowstate.mode_machine`, and explicit physical waist configuration cannot silently mismatch.
   - Update OpenSoT waist handling:
-    - do not command physically locked waist roll/pitch joints.
+    - allow `waist_yaw_joint` / motor `12`.
+    - do not command physically locked waist roll/pitch motors `13` and `14`.
     - avoid assuming motor index equals model joint index when fixed joints are removed from the URDF.
 
 Issue 24 fixed: OpenSoT initialized from hard-coded `q_init` instead of live robot state.
@@ -1240,3 +1280,49 @@ Native Humble setup simplified to one member script.
   - Updated `docs/LAB_LAPTOP_SETUP_HUMBLE.md` to show one member command.
 - Notes:
   - `--skip-opensot`, `--skip-livox`, and `--skip-realsense-python` remain as troubleshooting options, not the default lab setup.
+  - `--skip-teleimager-client` is available if the Unitree image-stream client should not be installed on the laptop.
+
+G1 RealSense / camera access check, 2026-06-21:
+
+- Final postmortem:
+  - The initial RealSense access failure was a real error, but the root cause was the original physical USB port/link path on PC2.
+  - It was not caused by missing ROS RealSense packages, TeleImager installation, serial config, normal-user permissions, or the laptop-side setup.
+  - Evidence from the bad port:
+    - Minimal `pyrealsense2` tests could start or enumerate intermittently but could not reliably receive frames.
+    - Kernel logs showed USB/UVC failures on the old path, including `error -71`, failed UVC probe/control queries, resets, and failed device initialization.
+  - Evidence after moving the D435i to another USB port:
+    - The direct normal-user `pyrealsense2` color pipeline at `640x480x30` succeeded.
+    - Output included `got color: True`.
+  - Conclusion: the primary blocker was physical USB link instability, not the software stack.
+- Official Unitree camera path:
+  - Use Unitree TeleImager on PC2 for the G1 head camera video stream.
+  - `unitreerobotics/xr_teleoperate` points to `unitreerobotics/teleimager`.
+  - TeleImager supports RealSense cameras and streams frames over ZMQ and WebRTC.
+- Laptop-side setup:
+  - `unitreerobotics/teleimager` is installed editable under `~/g1pilot_ws/external/teleimager`.
+  - `scripts/setup_humble_user_workspace.sh` installs the TeleImager client by default.
+  - Working laptop viewer:
+    - `teleimager-client --host 192.168.123.164`
+- PC2 validated camera details:
+  - PC2 TeleImager env: `/home/unitree/miniconda3/envs/teleimager`
+  - PC2 TeleImager source: `/home/unitree/teleimager`
+  - D435i serial: `348522074178`
+  - Working RealSense profile: `640x480x30`
+  - TeleImager config should use:
+    - `head_camera.type: realsense`
+    - `head_camera.serial_number: '348522074178'`
+    - `head_camera.image_shape: [480, 640]`
+    - `head_camera.fps: 30`
+    - `head_camera.enable_zmq: true`
+    - `head_camera.zmq_port: 55555`
+    - `head_camera.enable_webrtc: true`
+    - `head_camera.webrtc_port: 60001`
+- Current validated state:
+  - TeleImager starts on PC2 with the RealSense after using the stable USB port and `640x480x30` profile.
+  - Laptop-side ZMQ subscribe to `tcp://192.168.123.164:55555` receives valid JPEG frames.
+  - The official Python client reports about `30 FPS`.
+  - Browser WebRTC at `https://192.168.123.164:60001` still shows black; this is a separate WebRTC/browser playback issue, not a camera-capture issue.
+- Boundary:
+  - TeleImager is the official Unitree image/video stream path for teleoperation.
+  - It is not currently a ROS `sensor_msgs/msg/PointCloud2` publisher for RViz depth clouds.
+  - If the task specifically needs `/camera/camera/depth/color/points`, a ROS RealSense wrapper still has to run on the robot computer physically connected to the D435i.

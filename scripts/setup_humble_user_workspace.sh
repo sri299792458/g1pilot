@@ -10,6 +10,8 @@ EXTERNAL_DIR="${WS}/external"
 UNITREE_SDK_DIR="${EXTERNAL_DIR}/unitree_sdk2_python"
 UNITREE_SDK_REPO="${UNITREE_SDK_REPO:-https://github.com/lnotspotl/unitree_sdk2_python.git}"
 UNITREE_SDK_COMMIT="${UNITREE_SDK_COMMIT:-7c661d27f4ae064ffd0dd633fd9d5b518ef0b508}"
+TELEIMAGER_DIR="${EXTERNAL_DIR}/teleimager"
+TELEIMAGER_REPO="${TELEIMAGER_REPO:-https://github.com/unitreerobotics/teleimager.git}"
 ASTROVIZ_REPO="${ASTROVIZ_REPO:-https://github.com/CDonosoK/astroviz_interfaces.git}"
 
 FOREST_WS="${WS}/deps/forest_ws"
@@ -20,6 +22,7 @@ DEPS_PREFIX="${FOREST_WS}/install"
 BUILD_OPENSOT=1
 BUILD_LIVOX=1
 BUILD_REALSENSE_PY=1
+INSTALL_TELEIMAGER_CLIENT=1
 
 for arg in "$@"; do
   case "${arg}" in
@@ -32,9 +35,12 @@ for arg in "$@"; do
     --skip-realsense-python)
       BUILD_REALSENSE_PY=0
       ;;
+    --skip-teleimager-client)
+      INSTALL_TELEIMAGER_CLIENT=0
+      ;;
     *)
       echo "Unknown option: ${arg}"
-      echo "Usage: $0 [--skip-opensot] [--skip-livox] [--skip-realsense-python]"
+      echo "Usage: $0 [--skip-opensot] [--skip-livox] [--skip-realsense-python] [--skip-teleimager-client]"
       exit 1
       ;;
   esac
@@ -62,6 +68,14 @@ clone_checkout() {
     git -C "${dir}" checkout "${ref}"
   fi
   git -C "${dir}" submodule update --init --recursive
+}
+
+source_setup_file() {
+  local setup_file="$1"
+  set +u
+  # shellcheck disable=SC1090
+  source "${setup_file}"
+  set -u
 }
 
 cmake_install() {
@@ -95,8 +109,38 @@ setup_workspace() {
   fi
 }
 
+ensure_virtualenv_module() {
+  if python3 -m virtualenv --version >/dev/null 2>&1; then
+    return
+  fi
+
+  local bootstrap_dir="${WS}/.bootstrap_python"
+  mkdir -p "${bootstrap_dir}"
+  python3 -m pip install --upgrade --target "${bootstrap_dir}" virtualenv
+  export PYTHONPATH="${bootstrap_dir}:${PYTHONPATH:-}"
+  python3 -m virtualenv --version >/dev/null
+}
+
+create_python_venv() {
+  local venv_dir="$1"
+
+  if [ -x "${venv_dir}/bin/python" ] && "${venv_dir}/bin/python" -m pip --version >/dev/null 2>&1; then
+    return
+  fi
+
+  rm -rf "${venv_dir}"
+  if python3 -m venv --system-site-packages "${venv_dir}"; then
+    return
+  fi
+
+  echo "python3 -m venv failed; falling back to local virtualenv bootstrap."
+  rm -rf "${venv_dir}"
+  ensure_virtualenv_module
+  python3 -m virtualenv --system-site-packages "${venv_dir}"
+}
+
 setup_python_env() {
-  python3 -m venv --system-site-packages "${WS}/.venv"
+  create_python_venv "${WS}/.venv"
   # shellcheck disable=SC1091
   source "${WS}/.venv/bin/activate"
   rm -f "${WS}/.venv/bin/register-python-argcomplete" 2>/dev/null || true
@@ -106,7 +150,7 @@ setup_python_env() {
     "catkin_pkg" \
     "colcon-common-extensions" \
     "cyclonedds==0.10.2" \
-    "empy" \
+    "empy<4" \
     "evdev" \
     "hhcm-forest" \
     "hidapi" \
@@ -140,22 +184,30 @@ import unitree_sdk2py
 print(pathlib.Path(unitree_sdk2py.__file__).resolve().parent)
 PY
 )"
-    mkdir -p "${unitree_site}/utils/lib"
-    cp "${crc_src}" "${unitree_site}/utils/lib/"
-    chmod +x "${unitree_site}/utils/lib/crc_amd64.so"
+    local crc_dest="${unitree_site}/utils/lib/crc_amd64.so"
+    mkdir -p "$(dirname "${crc_dest}")"
+    if [ "$(realpath "${crc_src}")" != "$(realpath -m "${crc_dest}")" ]; then
+      cp "${crc_src}" "${crc_dest}"
+      chmod +x "${crc_dest}"
+    fi
   fi
 }
 
+setup_teleimager_client() {
+  clone_checkout "${TELEIMAGER_REPO}" "${TELEIMAGER_DIR}"
+  python -m pip install -e "${TELEIMAGER_DIR}"
+}
+
 setup_build_env() {
-  # shellcheck disable=SC1091
-  source "/opt/ros/${ROS_DISTRO}/setup.bash"
+  source_setup_file "/opt/ros/${ROS_DISTRO}/setup.bash"
   # shellcheck disable=SC1091
   source "${WS}/.venv/bin/activate"
 
   export HHCM_FOREST_CLONE_DEFAULT_PROTO=https
   export CMAKE_PREFIX_PATH="${DEPS_PREFIX}:${CMAKE_PREFIX_PATH:-}"
   export LD_LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-  export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+  export LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
+  export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:/opt/ros/${ROS_DISTRO}/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
   export PYTHONPATH="${DEPS_PREFIX}/lib/python3.10/site-packages:${DEPS_PREFIX}/local/lib/python3.10/dist-packages:${PYTHONPATH:-}"
 }
 
@@ -170,48 +222,75 @@ ensure_forest_matlogger2() {
     fi
   fi
   forest grow matlogger2 --verbose --jobs "${JOBS}" --pwd user
-  # shellcheck disable=SC1091
-  source "${FOREST_WS}/setup.bash"
+  source_setup_file "${FOREST_WS}/setup.bash"
+  export AMENT_PREFIX_PATH="${DEPS_PREFIX}:/opt/ros/${ROS_DISTRO}:${AMENT_PREFIX_PATH:-}"
+  export CMAKE_PREFIX_PATH="${DEPS_PREFIX}:/opt/ros/${ROS_DISTRO}:${CMAKE_PREFIX_PATH:-}"
+  export LD_LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  export LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
+  export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:/opt/ros/${ROS_DISTRO}/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
 }
 
 build_opensot_stack() {
   ensure_forest_matlogger2
 
+  clone_checkout https://github.com/OctoMap/octomap.git \
+    "${SRC_DIR}/octomap" v1.9.8
+  cmake_install octomap "${SRC_DIR}/octomap" \
+    -DBUILD_OCTOVIS_SUBPROJECT=OFF \
+    -DBUILD_DYNAMICETD3D_SUBPROJECT=OFF \
+    -DBUILD_TESTING=OFF
+
   clone_checkout https://github.com/humanoid-path-planner/hpp-fcl.git \
     "${SRC_DIR}/hpp-fcl" 45e60ca7ba81e5394605f8c1097c016245d221c2
   cmake_install hpp-fcl "${SRC_DIR}/hpp-fcl" \
-    -DBUILD_PYTHON_INTERFACE=OFF
+    -DBUILD_PYTHON_INTERFACE=OFF \
+    -DBUILD_TESTING=OFF \
+    -Doctomap_DIR="${DEPS_PREFIX}/share/octomap"
 
   clone_checkout https://github.com/stack-of-tasks/pinocchio.git \
     "${SRC_DIR}/pinocchio" v3.9.0
+  local ros_multiarch="x86_64-linux-gnu"
+  if command -v dpkg-architecture >/dev/null 2>&1; then
+    ros_multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+  fi
   cmake_install pinocchio "${SRC_DIR}/pinocchio" \
     -DBUILD_WITH_URDF_SUPPORT=ON \
     -DBUILD_WITH_COLLISION_SUPPORT=ON \
     -DBUILD_TESTING=FALSE \
-    -DBUILD_PYTHON_INTERFACE=OFF
+    -DBUILD_PYTHON_INTERFACE=OFF \
+    -Doctomap_DIR="${DEPS_PREFIX}/share/octomap" \
+    -Durdfdom_DIR="/opt/ros/${ROS_DISTRO}/lib/${ros_multiarch}/urdfdom/cmake" \
+    -Durdfdom_headers_DIR="/opt/ros/${ROS_DISTRO}/lib/${ros_multiarch}/urdfdom_headers/cmake"
 
-  clone_checkout https://github.com/ADVRHumanoids/xbot2_interface.git \
-    "${SRC_DIR}/xbot2_interface" devel
-  cmake_install xbot2_interface "${SRC_DIR}/xbot2_interface" \
-    -DXBOT2_IFC_BUILD_TESTS=ON \
-    -DXBOT2_IFC_BUILD_ROS=OFF \
-    -DXBOT2_IFC_BUILD_ROS2=OFF \
-    -DBoost_USE_DEBUG_RUNTIME=OFF
+  clone_checkout https://github.com/ros-planning/srdfdom.git \
+    "${SRC_DIR}/srdfdom" 2.0.7
+  cmake_install srdfdom "${SRC_DIR}/srdfdom" \
+    -DBUILD_TESTING=OFF \
+    -Durdf_DIR="/opt/ros/${ROS_DISTRO}/share/urdf/cmake" \
+    -Durdfdom_DIR="/opt/ros/${ROS_DISTRO}/lib/${ros_multiarch}/urdfdom/cmake" \
+    -Durdfdom_headers_DIR="/opt/ros/${ROS_DISTRO}/lib/${ros_multiarch}/urdfdom_headers/cmake"
 
-  clone_checkout https://github.com/oxfordcontrol/osqp.git \
-    "${SRC_DIR}/osqp" 0b34f2ef5c5eec314e7945762e1c8167e937afbd
-  cmake_install osqp "${SRC_DIR}/osqp" \
-    -DDLONG=OFF
-
-  clone_checkout https://github.com/Simple-Robotics/proxsuite.git \
-    "${SRC_DIR}/proxsuite" f19f07b51f66268db1f16cbeb538e891bb6d4e21
-  cmake_install proxsuite "${SRC_DIR}/proxsuite" \
-    -DBUILD_WITH_VECTORIZATION_SUPPORT=OFF \
+  clone_checkout https://github.com/ros/eigen_stl_containers.git \
+    "${SRC_DIR}/eigen_stl_containers" 1.1.0
+  cmake_install eigen_stl_containers "${SRC_DIR}/eigen_stl_containers" \
     -DBUILD_TESTING=OFF
+
+  clone_checkout https://github.com/ros-planning/random_numbers.git \
+    "${SRC_DIR}/random_numbers" 2.0.1
+  cmake_install random_numbers "${SRC_DIR}/random_numbers" \
+    -DBUILD_TESTING=OFF
+
+  clone_checkout https://github.com/danfis/libccd.git \
+    "${SRC_DIR}/libccd" v2.1
+  cmake_install libccd "${SRC_DIR}/libccd" \
+    -DBUILD_SHARED_LIBS=ON \
+    -DENABLE_DOUBLE_PRECISION=ON
 
   clone_checkout https://github.com/flexible-collision-library/fcl.git \
     "${SRC_DIR}/fcl" v0.6.0
-  cmake_install fcl "${SRC_DIR}/fcl"
+  cmake_install fcl "${SRC_DIR}/fcl" \
+    -DBUILD_TESTING=OFF \
+    -DFCL_BUILD_TESTS=OFF
   mkdir -p "${DEPS_PREFIX}/lib/cmake/fcl"
   cat > "${DEPS_PREFIX}/lib/cmake/fcl/fclConfigVersion.cmake" <<'EOF'
 set(PACKAGE_VERSION "0.6.1")
@@ -227,9 +306,53 @@ if(PACKAGE_FIND_VERSION)
 endif()
 EOF
 
+  clone_checkout https://github.com/ros-planning/geometric_shapes.git \
+    "${SRC_DIR}/geometric_shapes" 2.3.2
+  cmake_install geometric_shapes "${SRC_DIR}/geometric_shapes" \
+    -DBUILD_TESTING=OFF \
+    -Doctomap_DIR="${DEPS_PREFIX}/share/octomap" \
+    -Dfcl_DIR="${DEPS_PREFIX}/lib/cmake/fcl" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-L${DEPS_PREFIX}/lib"
+
+  clone_checkout https://github.com/ADVRHumanoids/xbot2_interface.git \
+    "${SRC_DIR}/xbot2_interface" devel
+  cmake_install xbot2_interface "${SRC_DIR}/xbot2_interface" \
+    -DXBOT2_IFC_BUILD_TESTS=ON \
+    -DXBOT2_IFC_BUILD_ROS=OFF \
+    -DXBOT2_IFC_BUILD_ROS2=OFF \
+    -DBoost_USE_DEBUG_RUNTIME=OFF \
+    -Durdf_DIR="/opt/ros/${ROS_DISTRO}/share/urdf/cmake"
+
+  clone_checkout https://github.com/oxfordcontrol/osqp.git \
+    "${SRC_DIR}/osqp" 0b34f2ef5c5eec314e7945762e1c8167e937afbd
+  cmake_install osqp "${SRC_DIR}/osqp" \
+    -DDLONG=OFF
+
+  clone_checkout https://github.com/Simple-Robotics/proxsuite.git \
+    "${SRC_DIR}/proxsuite" f19f07b51f66268db1f16cbeb538e891bb6d4e21
+  cmake_install proxsuite "${SRC_DIR}/proxsuite" \
+    -DBUILD_WITH_VECTORIZATION_SUPPORT=OFF \
+    -DBUILD_TESTING=OFF
+
   clone_checkout https://github.com/qpSWIFT/qpSWIFT.git \
     "${SRC_DIR}/qpSWIFT"
   cmake_install qpSWIFT "${SRC_DIR}/qpSWIFT"
+
+  clone_checkout https://github.com/wg-perception/object_recognition_msgs.git \
+    "${SRC_DIR}/object_recognition_msgs" 2.0.0
+  cmake_install object_recognition_msgs "${SRC_DIR}/object_recognition_msgs" \
+    -DBUILD_TESTING=OFF
+
+  clone_checkout https://github.com/OctoMap/octomap_msgs.git \
+    "${SRC_DIR}/octomap_msgs" 2.0.1
+  cmake_install octomap_msgs "${SRC_DIR}/octomap_msgs" \
+    -DBUILD_TESTING=OFF \
+    -Doctomap_DIR="${DEPS_PREFIX}/share/octomap"
+
+  clone_checkout https://github.com/ros-planning/moveit_msgs.git \
+    "${SRC_DIR}/moveit_msgs" 2.2.1
+  cmake_install moveit_msgs "${SRC_DIR}/moveit_msgs" \
+    -DBUILD_TESTING=OFF
 
   clone_checkout https://github.com/ADVRHumanoids/OpenSoT.git \
     "${SRC_DIR}/OpenSoT" 4.0-devel_ros2
@@ -261,8 +384,10 @@ write_env_file() {
 export G1PILOT_DEPS_PREFIX="${DEPS_PREFIX}"
 source /opt/ros/${ROS_DISTRO}/setup.bash
 source "${WS}/.venv/bin/activate"
+export AMENT_PREFIX_PATH="${DEPS_PREFIX}:\${AMENT_PREFIX_PATH:-}"
 export CMAKE_PREFIX_PATH="${DEPS_PREFIX}:\${CMAKE_PREFIX_PATH:-}"
 export LD_LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:\${LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:\${PKG_CONFIG_PATH:-}"
 export PYTHONPATH="${DEPS_PREFIX}/lib/python3.10/site-packages:${DEPS_PREFIX}/local/lib/python3.10/dist-packages:\${PYTHONPATH:-}"
 rm -f "${WS}/.venv/bin/register-python-argcomplete" 2>/dev/null || true
@@ -280,8 +405,7 @@ EOF
 }
 
 build_ros_workspace() {
-  # shellcheck disable=SC1091
-  source "${WS}/deps/env_humble_full.sh"
+  source_setup_file "${WS}/deps/env_humble_full.sh"
   cd "${WS}"
   if [ "${BUILD_LIVOX}" -eq 1 ]; then
     python -m colcon build --symlink-install --packages-up-to livox_ros_driver2 --cmake-args -DROS_EDITION=ROS2 -DDISTRO_ROS="${ROS_DISTRO}"
@@ -304,6 +428,10 @@ fi
 
 if [ "${BUILD_REALSENSE_PY}" -eq 1 ]; then
   python -m pip install -U "pyrealsense2" "numpy==1.26.4" "opencv-python<4.12"
+fi
+
+if [ "${INSTALL_TELEIMAGER_CLIENT}" -eq 1 ]; then
+  setup_teleimager_client
 fi
 
 write_env_file
