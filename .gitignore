@@ -50,6 +50,7 @@ qtcreator-*
 # Vscode
 .vscode
 /log
+/install/
 
 # Catkin custom files
 CATKIN_IGNORE
@@ -62,5 +63,7 @@ hardware/~$armAssembly.SLDASM
 
 /rosbags
 
-*.FCBak
+# Generated reachability artifacts
+config/reachability/*.npz
 
+*.FCBak

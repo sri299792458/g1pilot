@@ -9,8 +9,9 @@ from launch_ros.parameter_descriptions import ParameterValue
 import os
 
 package_name = "g1pilot"
-default_urdf_file_name = "g1_29dof.urdf"
+default_urdf_file_name = "g1_29dof_lock_waist.urdf"
 allowed_urdf_file_names = (
+    "g1_29dof_lock_waist.urdf",
     "g1_29dof.urdf",
     "g1_29dof_dx3.urdf",
     "g1_29dof_upperbody.urdf",
@@ -59,6 +60,7 @@ def _launch_setup(context):
     use_robot = LaunchConfiguration("use_robot")
     publish_joint_states = LaunchConfiguration("publish_joint_states")
     interface = LaunchConfiguration("interface")
+    domain_id = LaunchConfiguration("domain_id")
     sim_rate_hz = LaunchConfiguration("sim_rate_hz")
     mola_fixed_publish_tf = LaunchConfiguration("mola_fixed_publish_tf")
 
@@ -71,6 +73,7 @@ def _launch_setup(context):
             name='robot_state',
             parameters=[{
                 'interface': interface,
+                'domain_id': ParameterValue(domain_id, value_type=int),
                 'use_robot': ParameterValue(use_robot, value_type=bool),
                 'sim_rate_hz': ParameterValue(sim_rate_hz, value_type=float),
                 'publish_joint_states': ParameterValue(publish_joint_states, value_type=bool),
@@ -117,6 +120,8 @@ def generate_launch_description():
                               description="Use simulation (Gazebo) clock if true"),
         DeclareLaunchArgument("use_robot", default_value="true",
                               description="Connect to real robot if true"),
+        DeclareLaunchArgument("domain_id", default_value=EnvironmentVariable("G1_UNITREE_DOMAIN_ID", default_value="0"),
+                              description="Unitree DDS domain ID for robot_state when use_robot=true"),
         DeclareLaunchArgument("publish_joint_states", default_value="false",
                               description="Publish joint_states from node"),
         DeclareLaunchArgument("interface", default_value=EnvironmentVariable("G1_INTERFACE", default_value=""),

@@ -25,7 +25,12 @@ from geometry_msgs.msg import PoseStamped, TransformStamped, WrenchStamped,Point
 from std_msgs.msg import Bool, Float64
 from sensor_msgs.msg import JointState
 
-from visualization_msgs.msg import InteractiveMarkerControl, InteractiveMarker, Marker
+from visualization_msgs.msg import (
+    InteractiveMarkerControl,
+    InteractiveMarker,
+    InteractiveMarkerFeedback,
+    Marker,
+)
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from interactive_markers.menu_handler import MenuHandler
 
@@ -55,6 +60,7 @@ from g1pilot.utils.common import (
     DataBuffer,
 )
 from g1pilot.utils.joints_names import JOINT_NAMES_ROS
+from g1pilot.manipulation.reachability_map import ReachabilityMap
 
 G1_NUM_MOTOR = 29 # 12 body + 17 arm
 
@@ -129,18 +135,36 @@ class G1CollisionAvoidanceNode(Node):
         self.declare_parameter("use_robot", True)
         self.declare_parameter("enable_collision_avoidance", False)
         self.declare_parameter("interface", "")
+        self.declare_parameter("domain_id", 0)
         self.declare_parameter("send_cmds_to_robot", True)
+        self.declare_parameter("publish_arm_sdk", False)
         self.declare_parameter("publish_joint_states_opensot", False)
         self.declare_parameter("robot_description_timeout_s", 10.0)
         self.declare_parameter("arm_controlled", "both")
+        self.declare_parameter("enable_reachability_gate", False)
+        self.declare_parameter("reachability_map_file", "")
+        self.declare_parameter("reachability_query_radius", 0.04)
+        self.declare_parameter("reachability_min_neighbors", 1)
+        self.declare_parameter("reachability_snap_rejected_marker", False)
         self.interface = str(self.get_parameter("interface").value)
+        self.domain_id = int(self.get_parameter("domain_id").value)
         self.use_robot = bool(self.get_parameter("use_robot").value)
         self.declare_parameter("publish_pelvis_tf", not self.use_robot)
         self.enable_collision_avoidance = bool(self.get_parameter("enable_collision_avoidance").value)
         self.send_cmds_to_robot = bool(self.get_parameter("send_cmds_to_robot").value)
+        self.publish_arm_sdk = bool(self.get_parameter("publish_arm_sdk").value) or self.use_robot
         self.publish_joint_states_opensot = bool(self.get_parameter("publish_joint_states_opensot").value)
         self.publish_pelvis_tf = bool(self.get_parameter("publish_pelvis_tf").value)
         self.robot_description_timeout_s = float(self.get_parameter("robot_description_timeout_s").value)
+        self.enable_reachability_gate = bool(self.get_parameter("enable_reachability_gate").value)
+        self.reachability_map_file = self.get_parameter(
+            "reachability_map_file"
+        ).get_parameter_value().string_value
+        self.reachability_query_radius = float(self.get_parameter("reachability_query_radius").value)
+        self.reachability_min_neighbors = int(self.get_parameter("reachability_min_neighbors").value)
+        self.reachability_snap_rejected_marker = bool(
+            self.get_parameter("reachability_snap_rejected_marker").value
+        )
         self.arm_controlled = self._normalize_arm_controlled(
             self.get_parameter("arm_controlled").get_parameter_value().string_value
         )
@@ -162,6 +186,10 @@ class G1CollisionAvoidanceNode(Node):
         self.emergency_stop = False
         self._initialized = False
         self.arms_enabled = False
+        self.reachability_map = None
+        self.last_accepted_goals = {}
+        self.rejected_marker_snaps = set()
+        self._last_reachability_warning_time = {}
 
 
 
@@ -206,6 +234,8 @@ class G1CollisionAvoidanceNode(Node):
         else:
             raise RuntimeError("Failed to get robot_description from robot_state_publisher")
 
+        self._initialize_reachability_gate()
+
         self.interactive_marker_server = InteractiveMarkerServer(self, "teleoperation_markers")
         self.marker_poses = {}
         self.marker_enabled = {}
@@ -230,11 +260,20 @@ class G1CollisionAvoidanceNode(Node):
         self.model_q_index_by_motor_id = {}
         self._missing_model_motor_warnings = set()
 
-        if self.use_robot:
-            self.get_logger().info("use_robot=True -> Initializing Unitree DDS interface")
+        if self.publish_arm_sdk:
+            if not self.use_robot:
+                self.get_logger().warn(
+                    "publish_arm_sdk=True with use_robot=False -> publishing OpenSoT "
+                    "arm commands to Unitree DDS for simulation. Ensure interface is loopback."
+                )
+            else:
+                self.get_logger().info("use_robot=True -> Initializing Unitree DDS interface")
             self.initialize_interface()
         else:
-            self.get_logger().warn("use_robot=False -> Running in simulation/visualization mode (publishing only /joint_states)")
+            self.get_logger().warn(
+                "use_robot=False and publish_arm_sdk=False -> running in "
+                "visualization-only mode (publishing only ROS state topics)."
+            )
         if self.publish_pelvis_tf:
             self.get_logger().info("OpenSoT will publish world -> pelvis TF.")
         else:
@@ -272,7 +311,7 @@ class G1CollisionAvoidanceNode(Node):
         return LEFT_ARM_JOINTS + RIGHT_ARM_JOINTS
 
     def initialize_interface(self):
-        ChannelFactoryInitialize(0, self.interface)
+        ChannelFactoryInitialize(self.domain_id, self.interface)
 
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
         self.lowstate_subscriber.Init()
@@ -327,6 +366,101 @@ class G1CollisionAvoidanceNode(Node):
             q[i] = msg.motor_state[i].q
         return q
 
+    def _initialize_reachability_gate(self):
+        if not self.enable_reachability_gate:
+            self.get_logger().info("Reachability gate disabled.")
+            return
+
+        if not self.reachability_map_file:
+            raise RuntimeError(
+                "enable_reachability_gate:=true requires reachability_map_file."
+            )
+
+        self.reachability_map = ReachabilityMap.load(self.reachability_map_file)
+        self.get_logger().info(
+            "Reachability gate enabled: "
+            f"map={self.reachability_map_file}, "
+            f"radius={self.reachability_query_radius:.3f} m, "
+            f"min_neighbors={self.reachability_min_neighbors}"
+        )
+        self.get_logger().info("\n" + self.reachability_map.summary())
+
+    def _pose_stamped_to_affine(self, ps):
+        T = pyaffine3.Affine3()
+        T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
+        T.linear = R.from_quat([
+            ps.pose.orientation.x,
+            ps.pose.orientation.y,
+            ps.pose.orientation.z,
+            ps.pose.orientation.w,
+        ]).as_matrix()
+        return T
+
+    def _reachability_accepts(self, side, ps):
+        if self.reachability_map is None:
+            return True
+
+        target = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
+        result = self.reachability_map.query(
+            side,
+            target,
+            radius=self.reachability_query_radius,
+            min_neighbors=self.reachability_min_neighbors,
+        )
+        if result.reachable:
+            self.last_accepted_goals[side] = deepcopy(ps)
+            return True
+
+        now = time.monotonic()
+        last_warn = self._last_reachability_warning_time.get(side, 0.0)
+        if now - last_warn > 1.0:
+            nearest = "none"
+            if result.nearest_position is not None:
+                nearest = (
+                    f"({result.nearest_position[0]:.3f}, "
+                    f"{result.nearest_position[1]:.3f}, "
+                    f"{result.nearest_position[2]:.3f})"
+                )
+            self.get_logger().warn(
+                f"Rejected {side} hand target "
+                f"({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f}) "
+                f"outside reachability map: neighbors={result.neighbors}, "
+                f"nearest_distance={result.nearest_distance:.3f} m, nearest={nearest}"
+            )
+            self._last_reachability_warning_time[side] = now
+        return False
+
+    def _maybe_snap_rejected_marker(self, marker_name, side):
+        if not self.reachability_snap_rejected_marker:
+            return
+        last_goal = self.last_accepted_goals.get(side)
+        if last_goal is None:
+            return
+        self.marker_poses[marker_name] = deepcopy(last_goal)
+        self.interactive_marker_server.setPose(marker_name, last_goal.pose, last_goal.header)
+        self.interactive_marker_server.applyChanges()
+
+    def _set_gripper_reference_if_reachable(self, side, gripper, ps, marker_name=None):
+        if not self._reachability_accepts(side, ps):
+            if marker_name is not None:
+                self.rejected_marker_snaps.add(marker_name)
+            return False
+        gripper.setReference(self._pose_stamped_to_affine(ps))
+        return True
+
+    def _marker_side(self, marker_name):
+        if marker_name.startswith("right_"):
+            return "right"
+        if marker_name.startswith("left_"):
+            return "left"
+        return None
+
+    def _feedback_pose_stamped(self, feedback):
+        ps = PoseStamped()
+        ps.header = feedback.header
+        ps.pose = feedback.pose
+        return ps
+
     def _configure_model_joint_mapping(self):
         self.model_joint_names = list(self.model.getJointNames()[1:])
         model_q_index_by_joint_name = {
@@ -356,7 +490,7 @@ class G1CollisionAvoidanceNode(Node):
         q[6] = 1.0
 
         motor_q = None
-        if self.use_robot and self.all_motor_q is not None:
+        if self.publish_arm_sdk and self.all_motor_q is not None:
             motor_q = np.asarray(self.all_motor_q, dtype=float)
 
         initialized_from_lowstate = 0
@@ -443,6 +577,7 @@ class G1CollisionAvoidanceNode(Node):
             self.right_hand_goal = deepcopy(home_goal)
         elif side == "left":
             self.left_hand_goal = deepcopy(home_goal)
+        self.last_accepted_goals[side] = deepcopy(home_goal)
 
         self.interactive_marker_server.setPose(marker_name, home_goal.pose, home_goal.header)
         self.get_logger().info(f"Reset {side} hand goal to home.")
@@ -491,6 +626,10 @@ class G1CollisionAvoidanceNode(Node):
         ps.header.frame_id = frame_id
         ps.pose = int_marker.pose
         self.marker_poses[name] = ps
+        if name.startswith("right_"):
+            self.last_accepted_goals["right"] = deepcopy(ps)
+        elif name.startswith("left_"):
+            self.last_accepted_goals["left"] = deepcopy(ps)
 
         self.marker_home_poses = getattr(self, "marker_home_poses", {})
         self.marker_home_poses[name] = PoseStamped()
@@ -544,11 +683,26 @@ class G1CollisionAvoidanceNode(Node):
         if not self.marker_enabled.get(name, True):
             return
 
-        if name not in self.marker_poses:
-            self.marker_poses[name] = PoseStamped()
+        side = self._marker_side(name)
+        ps = self._feedback_pose_stamped(feedback)
+        if side is not None and self.reachability_map is not None:
+            if not self._reachability_accepts(side, ps):
+                self.rejected_marker_snaps.add(name)
+                if feedback.event_type == InteractiveMarkerFeedback.MOUSE_UP:
+                    self._maybe_snap_rejected_marker(name, side)
+                    self.rejected_marker_snaps.discard(name)
+                return
+            self.rejected_marker_snaps.discard(name)
 
-        self.marker_poses[name].header = feedback.header
-        self.marker_poses[name].pose = feedback.pose
+        self.marker_poses[name] = ps
+
+        if (
+            feedback.event_type == InteractiveMarkerFeedback.MOUSE_UP
+            and name in self.rejected_marker_snaps
+            and side is not None
+        ):
+            self._maybe_snap_rejected_marker(name, side)
+            self.rejected_marker_snaps.discard(name)
 
     def process_menu(self, feedback):
         name = feedback.marker_name
@@ -758,7 +912,7 @@ class G1CollisionAvoidanceNode(Node):
     # Control loop
     # ----------------------------
     def _send_passive_arm_command(self):
-        if not self.use_robot:
+        if not self.publish_arm_sdk:
             return
         if self.lowcmd_publisher is None or self.msg is None or self.crc is None:
             return
@@ -797,31 +951,23 @@ class G1CollisionAvoidanceNode(Node):
             use_marker_right = self.marker_enabled.get("right_hand_marker", False) and "right_hand_marker" in self.marker_poses
             if use_marker_right:
                 ps = self.marker_poses["right_hand_marker"]
-                T = pyaffine3.Affine3()
-                T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
-                T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
-                self.right_gripper.setReference(T)
+                self._set_gripper_reference_if_reachable(
+                    "right", self.right_gripper, ps, marker_name="right_hand_marker"
+                )
             elif self.right_hand_goal is not None:
                 ps = self.right_hand_goal
-                T = pyaffine3.Affine3()
-                T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
-                T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
-                self.right_gripper.setReference(T)
+                self._set_gripper_reference_if_reachable("right", self.right_gripper, ps)
 
         if self.control_left_arm:
             use_marker_left = self.marker_enabled.get("left_hand_marker", False) and "left_hand_marker" in self.marker_poses
             if use_marker_left:
                 ps = self.marker_poses["left_hand_marker"]
-                T = pyaffine3.Affine3()
-                T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
-                T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
-                self.left_gripper.setReference(T)
+                self._set_gripper_reference_if_reachable(
+                    "left", self.left_gripper, ps, marker_name="left_hand_marker"
+                )
             elif self.left_hand_goal is not None:
                 ps = self.left_hand_goal
-                T = pyaffine3.Affine3()
-                T.translation = np.array([ps.pose.position.x, ps.pose.position.y, ps.pose.position.z])
-                T.linear = R.from_quat([ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z, ps.pose.orientation.w]).as_matrix()
-                self.left_gripper.setReference(T)
+                self._set_gripper_reference_if_reachable("left", self.left_gripper, ps)
 
         # solve
         self.stack.update()
@@ -863,7 +1009,7 @@ class G1CollisionAvoidanceNode(Node):
                 self.get_clock().now().to_msg(),
             )
 
-        if not self.use_robot:
+        if not self.publish_arm_sdk:
             return
 
         if self.lowcmd_publisher is None or self.msg is None or self.crc is None:

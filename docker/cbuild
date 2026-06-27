@@ -7,8 +7,35 @@ source /home/.base/bin/activate
 
 rm -f /home/.base/bin/register-python-argcomplete 2>/dev/null || true
 
+ensure_python_runtime_deps() {
+  /home/.base/bin/python3 - <<'PY' >/dev/null 2>&1
+import importlib
+import numpy
+import scipy
+
+assert numpy.__version__ == "1.26.4"
+assert scipy.__version__ == "1.13.1"
+for module_name in ("colcon_core", "decorator", "lark", "PIL"):
+    importlib.import_module(module_name)
+PY
+}
+
+if ! ensure_python_runtime_deps; then
+  /home/.base/bin/python3 -m pip install -U \
+    "setuptools<80" \
+    wheel \
+    "numpy==1.26.4" \
+    "scipy==1.13.1" \
+    "opencv-python<4.12" \
+    colcon-common-extensions \
+    decorator \
+    lark \
+    pillow
+fi
+
 WS=/ros2_ws
 DEFAULT_SKIP_PKGS=("livox_ros_driver2")
+LIVOX_CMAKE_ARGS=(-DROS_EDITION=ROS2 -DDISTRO_ROS="${ROS_DISTRO}")
 
 clean_pkgs() {
   rm -rf "${WS}/log" 2>/dev/null || true
@@ -40,7 +67,7 @@ if [ "$#" -eq 0 ]; then
 
   if [ "${BUILD_LIVOX:-0}" = "1" ]; then
     clean_pkgs livox_ros_driver2
-    /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4
+    /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4 --cmake-args "${LIVOX_CMAKE_ARGS[@]}"
   else
     clean_pkgs livox_ros_driver2
     /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4 --packages-skip "${DEFAULT_SKIP_PKGS[@]}"
@@ -52,9 +79,13 @@ fi
 if [ "$1" = "all" ]; then
   shift
   clean_pkgs unitree_api unitree_go unitree_hg unitree_sdk2py livox_ros_driver2
-  /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4
+  /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4 --cmake-args "${LIVOX_CMAKE_ARGS[@]}"
   exit 0
 fi
 
 clean_pkgs "$@"
- /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4 --packages-select "$@"
+if has_token livox_ros_driver2 "$@"; then
+  /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4 --packages-select "$@" --cmake-args "${LIVOX_CMAKE_ARGS[@]}"
+else
+  /home/.base/bin/python3 -m colcon build --symlink-install --executor parallel --parallel-workers 4 --packages-select "$@"
+fi

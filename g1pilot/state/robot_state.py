@@ -87,11 +87,13 @@ class RobotState(Node):
 
         self.declare_parameter('use_robot', True)
         self.declare_parameter('interface', '')
+        self.declare_parameter('domain_id', 0)
         self.declare_parameter('publish_joint_states', True)
         self.declare_parameter('sim_rate_hz', 50.0)
 
         self.use_robot = bool(self.get_parameter('use_robot').value)
         interface = self.get_parameter('interface').get_parameter_value().string_value
+        self.domain_id = int(self.get_parameter('domain_id').value)
         self.publish_joint_states = bool(self.get_parameter('publish_joint_states').value)
         self.sim_rate_hz = float(self.get_parameter('sim_rate_hz').value)
         if self.sim_rate_hz <= 0.0:
@@ -109,7 +111,7 @@ class RobotState(Node):
         self._warned_short_motor_state = False
 
         if self.use_robot:
-            ChannelFactoryInitialize(0, interface)
+            ChannelFactoryInitialize(self.domain_id, interface)
             self.subscriber_low_state = ChannelSubscriber("rt/lowstate", LowState_)
             self.subscriber_low_state.Init(self.callback_lowstate)
         else:

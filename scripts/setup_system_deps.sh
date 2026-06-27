@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROS_DISTRO="${ROS_DISTRO:-humble}"
+# Distro-aware system dependency installer. The historical "humble" filename is
+# kept so existing lab-laptop notes and commands keep working.
+
+detect_ros_distro() {
+  for distro in jazzy humble; do
+    if [ -f "/opt/ros/${distro}/setup.bash" ]; then
+      echo "${distro}"
+      return
+    fi
+  done
+  find /opt/ros -mindepth 2 -maxdepth 2 -name setup.bash 2>/dev/null \
+    | sed -n 's#^/opt/ros/\([^/]*\)/setup.bash$#\1#p' \
+    | sort \
+    | tail -n 1
+}
+
+ROS_DISTRO="${ROS_DISTRO:-$(detect_ros_distro)}"
 
 if [ "${EUID}" -ne 0 ]; then
   echo "Run this once with sudo:"
@@ -9,22 +25,18 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-if [ "${ROS_DISTRO}" != "humble" ]; then
-  echo "This setup script is for ROS 2 Humble. Current ROS_DISTRO=${ROS_DISTRO}"
-  exit 1
-fi
-
 if [ -r /etc/os-release ]; then
   # shellcheck disable=SC1091
   . /etc/os-release
-  if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "22.04" ]; then
-    echo "Warning: expected Ubuntu 22.04, found ${PRETTY_NAME:-unknown}."
-  fi
+  case "${ID:-}:${VERSION_ID:-}" in
+    ubuntu:22.04|ubuntu:24.04) ;;
+    *) echo "Warning: expected Ubuntu 22.04 or 24.04, found ${PRETTY_NAME:-unknown}." ;;
+  esac
 fi
 
 if [ ! -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
-  echo "ROS 2 Humble was not found at /opt/ros/${ROS_DISTRO}."
-  echo "Install ROS 2 Humble first, then rerun this script."
+  echo "ROS 2 ${ROS_DISTRO:-<unset>} was not found at /opt/ros/${ROS_DISTRO}/setup.bash."
+  echo "Install ROS 2 first, or set ROS_DISTRO explicitly, then rerun this script."
   exit 1
 fi
 
@@ -138,7 +150,7 @@ if command -v rosdep >/dev/null 2>&1; then
 fi
 
 echo
-echo "System dependencies installed for Ubuntu 22.04 + ROS 2 Humble."
+echo "System dependencies installed for ROS 2 ${ROS_DISTRO}."
 if [ "${WITH_FULL}" -eq 1 ]; then
   echo "Full native build apt dependencies were included."
 fi

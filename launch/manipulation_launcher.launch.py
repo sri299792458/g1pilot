@@ -8,8 +8,10 @@ from ament_index_python.packages import get_package_share_directory
 import os
 
 package_name = "g1pilot"
-default_urdf_file_name = "g1_29dof.urdf"
+default_urdf_file_name = "g1_29dof_lock_waist.urdf"
+default_reachability_map_file_name = "g1_29dof_lock_waist_reachability.npz"
 allowed_urdf_file_names = (
+    "g1_29dof_lock_waist.urdf",
     "g1_29dof.urdf",
     "g1_29dof_dx3.urdf",
     "g1_29dof_upperbody.urdf",
@@ -21,12 +23,13 @@ def _as_bool(value):
 
 def _validate_robot_interface(context):
     use_robot = _as_bool(LaunchConfiguration("use_robot").perform(context))
+    publish_arm_sdk = _as_bool(LaunchConfiguration("publish_arm_sdk").perform(context))
     interface = LaunchConfiguration("interface").perform(context).strip()
-    if use_robot and not interface:
+    if (use_robot or publish_arm_sdk) and not interface:
         raise RuntimeError(
-            "G1_INTERFACE is required when use_robot:=true. "
+            "G1_INTERFACE/interface is required when use_robot:=true or publish_arm_sdk:=true. "
             "Set it with `export G1_INTERFACE=<iface>`, pass `interface:=<iface>`, "
-            "or launch with `use_robot:=false` for offline mode."
+            "or launch with `use_robot:=false publish_arm_sdk:=false` for offline mode."
         )
     return []
 
@@ -52,12 +55,19 @@ def _load_robot_description(context):
 
 def _launch_setup(context):
     interface = LaunchConfiguration("interface")
+    domain_id = LaunchConfiguration("domain_id")
     use_robot = LaunchConfiguration("use_robot")
     arm_controlled = LaunchConfiguration("arm_controlled")
     enable_collision_avoidance = LaunchConfiguration("enable_collision_avoidance")
     send_cmds_to_robot = LaunchConfiguration("send_cmds_to_robot")
+    publish_arm_sdk = LaunchConfiguration("publish_arm_sdk")
     publish_joint_states_opensot = LaunchConfiguration("publish_joint_states_opensot")
     start_robot_state_publisher = LaunchConfiguration("start_robot_state_publisher")
+    enable_reachability_gate = LaunchConfiguration("enable_reachability_gate")
+    reachability_map_file = LaunchConfiguration("reachability_map_file")
+    reachability_query_radius = LaunchConfiguration("reachability_query_radius")
+    reachability_min_neighbors = LaunchConfiguration("reachability_min_neighbors")
+    reachability_snap_rejected_marker = LaunchConfiguration("reachability_snap_rejected_marker")
 
     urdf, robot_desc = _load_robot_description(context)
 
@@ -80,11 +90,20 @@ def _launch_setup(context):
             name='opensot_solver',
             parameters=[{
                 'interface': interface,
+                'domain_id': ParameterValue(domain_id, value_type=int),
                 'arm_controlled': ParameterValue(arm_controlled, value_type=str),
                 'use_robot': ParameterValue(use_robot, value_type=bool),
                 'enable_collision_avoidance': ParameterValue(enable_collision_avoidance, value_type=bool),
                 'send_cmds_to_robot': ParameterValue(send_cmds_to_robot, value_type=bool),
+                'publish_arm_sdk': ParameterValue(publish_arm_sdk, value_type=bool),
                 'publish_joint_states_opensot': ParameterValue(publish_joint_states_opensot, value_type=bool),
+                'enable_reachability_gate': ParameterValue(enable_reachability_gate, value_type=bool),
+                'reachability_map_file': ParameterValue(reachability_map_file, value_type=str),
+                'reachability_query_radius': ParameterValue(reachability_query_radius, value_type=float),
+                'reachability_min_neighbors': ParameterValue(reachability_min_neighbors, value_type=int),
+                'reachability_snap_rejected_marker': ParameterValue(
+                    reachability_snap_rejected_marker, value_type=bool
+                ),
             }],
             output='screen'
         ),
@@ -104,8 +123,16 @@ def _launch_setup(context):
     ]
 
 def generate_launch_description():
+    default_reachability_map_file = os.path.join(
+        get_package_share_directory(package_name),
+        "config",
+        "reachability",
+        default_reachability_map_file_name,
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument("interface", default_value=EnvironmentVariable("G1_INTERFACE", default_value="")),
+        DeclareLaunchArgument("domain_id", default_value=EnvironmentVariable("G1_UNITREE_DOMAIN_ID", default_value="0")),
         DeclareLaunchArgument("use_robot", default_value="true"),
         DeclareLaunchArgument(
             "arm_controlled",
@@ -115,9 +142,22 @@ def generate_launch_description():
                 "This selects OpenSoT hand tasks and DX3 hand interfaces."
             ),
         ),
-        DeclareLaunchArgument("enable_collision_avoidance", default_value="false"),
+        DeclareLaunchArgument("enable_collision_avoidance", default_value="true"),
         DeclareLaunchArgument("send_cmds_to_robot", default_value="true"),
+        DeclareLaunchArgument(
+            "publish_arm_sdk",
+            default_value="false",
+            description=(
+                "Publish OpenSoT arm commands on rt/arm_sdk even when use_robot=false. "
+                "Use only for simulator DDS on loopback."
+            ),
+        ),
         DeclareLaunchArgument("publish_joint_states_opensot", default_value="false"),
+        DeclareLaunchArgument("enable_reachability_gate", default_value="true"),
+        DeclareLaunchArgument("reachability_map_file", default_value=default_reachability_map_file),
+        DeclareLaunchArgument("reachability_query_radius", default_value="0.04"),
+        DeclareLaunchArgument("reachability_min_neighbors", default_value="1"),
+        DeclareLaunchArgument("reachability_snap_rejected_marker", default_value="true"),
         DeclareLaunchArgument(
             "start_robot_state_publisher",
             default_value="true",

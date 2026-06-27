@@ -201,7 +201,10 @@ RUN git clone -b 4.0-devel_ros2 https://github.com/ADVRHumanoids/OpenSoT.git && 
     cd build && \
     cmake -DCMAKE_INSTALL_PREFIX:STRING=/home/forest_ws/install -DCMAKE_BUILD_TYPE:STRING=Release .. && \
     make && \
-    make install
+    make install && \
+    PY_SITE="/home/forest_ws/install/lib/python$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')/site-packages" && \
+    mkdir -p "${PY_SITE}" && \
+    cp /deps/OpenSoT/build/lib/pyopensot_collision*.so "${PY_SITE}/"
 
 # Livox lidar
 # RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git && \
@@ -424,9 +427,11 @@ RUN echo "source /home/.base/bin/activate" >> /root/.bashrc
 
 RUN rm -f /home/.base/bin/register-python-argcomplete || true
 
-RUN echo "export LD_LIBRARY_PATH=/usr/local/lib:\$LD_LIBRARY_PATH" >> /root/.bashrc
+RUN echo "export LD_LIBRARY_PATH=/home/forest_ws/install/lib:/home/forest_ws/install/lib/x86_64-linux-gnu:/usr/local/lib:\${LD_LIBRARY_PATH:-}" >> /root/.bashrc && \
+    echo "export PYTHONPATH=/home/forest_ws/install/lib/python3.12/site-packages:\${PYTHONPATH:-}" >> /root/.bashrc
 
-ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV LD_LIBRARY_PATH=/home/forest_ws/install/lib:/home/forest_ws/install/lib/x86_64-linux-gnu:/usr/local/lib
+ENV PYTHONPATH=/home/forest_ws/install/lib/python3.12/site-packages
 RUN PYTHONPATH= /home/.base/bin/python3 -m pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
 
 CMD ["bash"]

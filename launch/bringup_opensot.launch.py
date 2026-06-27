@@ -21,11 +21,22 @@ def _validate_robot_interface(context):
 
 def generate_launch_description():
     pkg1_share = FindPackageShare('g1pilot').find('g1pilot')
+    default_reachability_map_file = os.path.join(
+        pkg1_share,
+        "config",
+        "reachability",
+        "g1_29dof_lock_waist_reachability.npz",
+    )
 
     interface = LaunchConfiguration("interface")
     use_robot = LaunchConfiguration("use_robot")
     arm_controlled = LaunchConfiguration("arm_controlled")
     urdf_file = LaunchConfiguration("urdf_file")
+    enable_reachability_gate = LaunchConfiguration("enable_reachability_gate")
+    reachability_map_file = LaunchConfiguration("reachability_map_file")
+    reachability_query_radius = LaunchConfiguration("reachability_query_radius")
+    reachability_min_neighbors = LaunchConfiguration("reachability_min_neighbors")
+    reachability_snap_rejected_marker = LaunchConfiguration("reachability_snap_rejected_marker")
 
     navigation_launcher = os.path.join(pkg1_share, 'launch', 'navigation_launcher.launch.py')
     robot_state_launcher = os.path.join(pkg1_share, 'launch', 'robot_state_launcher.launch.py')
@@ -33,7 +44,12 @@ def generate_launch_description():
     manipulation_launcher = os.path.join(pkg1_share, 'launch', 'manipulation_launcher.launch.py')
 
     return LaunchDescription([
-        DeclareLaunchArgument("enable_collision_avoidance", default_value="false"),
+        DeclareLaunchArgument("enable_collision_avoidance", default_value="true"),
+        DeclareLaunchArgument("enable_reachability_gate", default_value="true"),
+        DeclareLaunchArgument("reachability_map_file", default_value=default_reachability_map_file),
+        DeclareLaunchArgument("reachability_query_radius", default_value="0.04"),
+        DeclareLaunchArgument("reachability_min_neighbors", default_value="1"),
+        DeclareLaunchArgument("reachability_snap_rejected_marker", default_value="true"),
         DeclareLaunchArgument("use_robot", default_value="true"),
         DeclareLaunchArgument(
             "arm_controlled",
@@ -47,7 +63,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "urdf_file",
-            default_value="g1_29dof.urdf",
+            default_value="g1_29dof_lock_waist.urdf",
             description="Packaged G1 URDF file to publish",
         ),
         OpaqueFunction(function=_validate_robot_interface),
@@ -79,6 +95,11 @@ def generate_launch_description():
                 'use_robot': use_robot,
                 'arm_controlled': arm_controlled,
                 'enable_collision_avoidance': LaunchConfiguration('enable_collision_avoidance'),
+                'enable_reachability_gate': enable_reachability_gate,
+                'reachability_map_file': reachability_map_file,
+                'reachability_query_radius': reachability_query_radius,
+                'reachability_min_neighbors': reachability_min_neighbors,
+                'reachability_snap_rejected_marker': reachability_snap_rejected_marker,
                 'send_cmds_to_robot': 'false',
                 'publish_joint_states_opensot': 'true',
                 'start_robot_state_publisher': 'false',

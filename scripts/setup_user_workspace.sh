@@ -1,10 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROS_DISTRO="${ROS_DISTRO:-humble}"
-WS="${G1PILOT_WS:-${HOME}/g1pilot_ws}"
+# Distro-aware user-space setup. Set ROS_DISTRO=humble on the Ubuntu 22 lab
+# laptop, ROS_DISTRO=jazzy on Ubuntu 24/Jazzy, or leave it unset to auto-detect
+# an installed ROS distro.
+
+detect_ros_distro() {
+  for distro in jazzy humble; do
+    if [ -f "/opt/ros/${distro}/setup.bash" ]; then
+      echo "${distro}"
+      return
+    fi
+  done
+  find /opt/ros -mindepth 2 -maxdepth 2 -name setup.bash 2>/dev/null \
+    | sed -n 's#^/opt/ros/\([^/]*\)/setup.bash$#\1#p' \
+    | sort \
+    | tail -n 1
+}
+
+ROS_DISTRO="${ROS_DISTRO:-$(detect_ros_distro)}"
+WS="${G1PILOT_WS:-${HOME}/g1pilot_${ROS_DISTRO}_ws}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JOBS="${JOBS:-4}"
+BASE_PYTHON="${G1PILOT_PYTHON:-/usr/bin/python3}"
 
 EXTERNAL_DIR="${WS}/external"
 UNITREE_SDK_DIR="${EXTERNAL_DIR}/unitree_sdk2_python"
@@ -46,13 +64,15 @@ for arg in "$@"; do
   esac
 done
 
-if [ "${ROS_DISTRO}" != "humble" ]; then
-  echo "This setup script is for ROS 2 Humble. Current ROS_DISTRO=${ROS_DISTRO}"
+if [ ! -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
+  echo "ROS 2 ${ROS_DISTRO:-<unset>} was not found at /opt/ros/${ROS_DISTRO}/setup.bash."
+  echo "Set ROS_DISTRO explicitly, for example ROS_DISTRO=humble or ROS_DISTRO=jazzy."
   exit 1
 fi
 
-if [ ! -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
-  echo "ROS 2 Humble was not found at /opt/ros/${ROS_DISTRO}."
+if [ ! -x "${BASE_PYTHON}" ]; then
+  echo "Python interpreter not found or not executable: ${BASE_PYTHON}"
+  echo "Set G1PILOT_PYTHON to the Python interpreter used by ROS ${ROS_DISTRO}."
   exit 1
 fi
 
@@ -70,6 +90,23 @@ clone_checkout() {
   git -C "${dir}" submodule update --init --recursive
 }
 
+ensure_header_include() {
+  local file="$1"
+  local include="$2"
+
+  if [ ! -f "${file}" ] || grep -qE "^[[:space:]]*#include[[:space:]]*<${include}>" "${file}"; then
+    return
+  fi
+
+  if grep -qE '^[[:space:]]*#pragma[[:space:]]+once' "${file}"; then
+    sed -i -E "/^[[:space:]]*#pragma[[:space:]]+once/a #include <${include}>" "${file}"
+  elif grep -qE '^[[:space:]]*#define[[:space:]]+[^[:space:]]+' "${file}"; then
+    sed -i -E "/^[[:space:]]*#define[[:space:]]+[^[:space:]]+/a #include <${include}>" "${file}"
+  else
+    sed -i "1i #include <${include}>" "${file}"
+  fi
+}
+
 source_setup_file() {
   local setup_file="$1"
   set +u
@@ -78,12 +115,50 @@ source_setup_file() {
   set -u
 }
 
+filter_conda_path_entries() {
+  local value="${1:-}"
+  local entry
+  local out=""
+  local conda_prefix="${CONDA_PREFIX:-}"
+
+  IFS=':' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    case "${entry}" in
+      ""|"${HOME}/miniconda3"*|"${HOME}/anaconda3"*)
+        continue
+        ;;
+    esac
+    if [ -n "${conda_prefix}" ] && [[ "${entry}" == "${conda_prefix}"* ]]; then
+      continue
+    fi
+    out="${out:+${out}:}${entry}"
+  done
+  printf '%s' "${out}"
+}
+
+sanitize_native_build_env() {
+  export CMAKE_PREFIX_PATH="$(filter_conda_path_entries "${CMAKE_PREFIX_PATH:-}")"
+  export CMAKE_MODULE_PATH="$(filter_conda_path_entries "${CMAKE_MODULE_PATH:-}")"
+  export LD_LIBRARY_PATH="$(filter_conda_path_entries "${LD_LIBRARY_PATH:-}")"
+  export LIBRARY_PATH="$(filter_conda_path_entries "${LIBRARY_PATH:-}")"
+  export PKG_CONFIG_PATH="$(filter_conda_path_entries "${PKG_CONFIG_PATH:-}")"
+
+  local ignored_prefixes=("${HOME}/miniconda3" "${HOME}/anaconda3")
+  if [ -n "${CONDA_PREFIX:-}" ]; then
+    ignored_prefixes=("${CONDA_PREFIX}" "${ignored_prefixes[@]}")
+  fi
+  local ignored
+  ignored="$(IFS=';'; echo "${ignored_prefixes[*]}")"
+  export CMAKE_IGNORE_PREFIX_PATH="${ignored}${CMAKE_IGNORE_PREFIX_PATH:+;${CMAKE_IGNORE_PREFIX_PATH}}"
+}
+
 cmake_install() {
   local name="$1"
   local src="$2"
   shift 2
   local build="${BUILD_DIR}/${name}"
   mkdir -p "${build}"
+  sanitize_native_build_env
   cmake -S "${src}" -B "${build}" \
     -DCMAKE_INSTALL_PREFIX:STRING="${DEPS_PREFIX}" \
     -DCMAKE_BUILD_TYPE:STRING=Release \
@@ -110,15 +185,15 @@ setup_workspace() {
 }
 
 ensure_virtualenv_module() {
-  if python3 -m virtualenv --version >/dev/null 2>&1; then
+  if "${BASE_PYTHON}" -m virtualenv --version >/dev/null 2>&1; then
     return
   fi
 
   local bootstrap_dir="${WS}/.bootstrap_python"
   mkdir -p "${bootstrap_dir}"
-  python3 -m pip install --upgrade --target "${bootstrap_dir}" virtualenv
+  "${BASE_PYTHON}" -m pip install --upgrade --target "${bootstrap_dir}" virtualenv
   export PYTHONPATH="${bootstrap_dir}:${PYTHONPATH:-}"
-  python3 -m virtualenv --version >/dev/null
+  "${BASE_PYTHON}" -m virtualenv --version >/dev/null
 }
 
 create_python_venv() {
@@ -129,17 +204,52 @@ create_python_venv() {
   fi
 
   rm -rf "${venv_dir}"
-  if python3 -m venv --system-site-packages "${venv_dir}"; then
+  if "${BASE_PYTHON}" -m venv --system-site-packages "${venv_dir}"; then
     return
   fi
 
-  echo "python3 -m venv failed; falling back to local virtualenv bootstrap."
+  echo "${BASE_PYTHON} -m venv failed; falling back to local virtualenv bootstrap."
   rm -rf "${venv_dir}"
   ensure_virtualenv_module
-  python3 -m virtualenv --system-site-packages "${venv_dir}"
+  "${BASE_PYTHON}" -m virtualenv --system-site-packages "${venv_dir}"
+}
+
+verify_base_python_matches_ros() {
+  source_setup_file "/opt/ros/${ROS_DISTRO}/setup.bash"
+  "${BASE_PYTHON}" - <<'PY'
+import rclpy
+print("Verified ROS Python import:", rclpy.__file__)
+PY
+}
+
+prepare_cyclonedds_python_prefix() {
+  local ros_prefix="/opt/ros/${ROS_DISTRO}"
+  local prefix="${WS}/deps/cyclonedds_python_prefix"
+  local lib_dir="${ros_prefix}/lib"
+  local include_dir="${ros_prefix}/include"
+
+  if [ -f "${ros_prefix}/lib/x86_64-linux-gnu/libddsc.so" ]; then
+    lib_dir="${ros_prefix}/lib/x86_64-linux-gnu"
+  fi
+  if [ -d "${ros_prefix}/include/CycloneDDS" ]; then
+    include_dir="${ros_prefix}/include/CycloneDDS"
+  fi
+
+  mkdir -p "${prefix}"
+  ln -sfn "${include_dir}" "${prefix}/include"
+  ln -sfn "${ros_prefix}/bin" "${prefix}/bin"
+  ln -sfn "${lib_dir}" "${prefix}/lib"
+
+  export CYCLONEDDS_HOME="${prefix}"
+  export CMAKE_PREFIX_PATH="${prefix}:${ros_prefix}:${CMAKE_PREFIX_PATH:-}"
+  export LD_LIBRARY_PATH="${prefix}/lib:${ros_prefix}/lib:${ros_prefix}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+  export LIBRARY_PATH="${prefix}/lib:${LIBRARY_PATH:-}"
 }
 
 setup_python_env() {
+  source_setup_file "/opt/ros/${ROS_DISTRO}/setup.bash"
+  prepare_cyclonedds_python_prefix
+
   create_python_venv "${WS}/.venv"
   # shellcheck disable=SC1091
   source "${WS}/.venv/bin/activate"
@@ -159,11 +269,15 @@ setup_python_env() {
     "meshcat" \
     "mujoco" \
     "numpy==1.26.4" \
+    "onnxruntime" \
     "opencv-python<4.12" \
+    "pygame" \
     "pyqt6" \
     "pyspacemouse" \
     "robot_descriptions" \
     "rich-click" \
+    "scipy==1.13.1" \
+    "torch" \
     "ttictoc"
 }
 
@@ -195,20 +309,76 @@ PY
 
 setup_teleimager_client() {
   clone_checkout "${TELEIMAGER_REPO}" "${TELEIMAGER_DIR}"
-  python -m pip install -e "${TELEIMAGER_DIR}"
+  python -m pip install \
+    "logging_mp" \
+    "numpy==1.26.4" \
+    "opencv-python<4.12" \
+    "pyyaml" \
+    "pyzmq"
+  # TeleImager upstream documents Python 3.10 and currently declares
+  # requires-python <3.12. The client imports under Jazzy/Python 3.12 once its
+  # dependencies are installed, so keep the lab client available without letting
+  # pip's resolver replace the pinned NumPy/OpenCV stack.
+  python -m pip install --ignore-requires-python --no-deps -e "${TELEIMAGER_DIR}"
 }
 
 setup_build_env() {
   source_setup_file "/opt/ros/${ROS_DISTRO}/setup.bash"
   # shellcheck disable=SC1091
   source "${WS}/.venv/bin/activate"
+  sanitize_native_build_env
+  local py_version
+  py_version="$(python - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
 
   export HHCM_FOREST_CLONE_DEFAULT_PROTO=https
   export CMAKE_PREFIX_PATH="${DEPS_PREFIX}:${CMAKE_PREFIX_PATH:-}"
   export LD_LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
   export LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
   export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:/opt/ros/${ROS_DISTRO}/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
-  export PYTHONPATH="${DEPS_PREFIX}/lib/python3.10/site-packages:${DEPS_PREFIX}/local/lib/python3.10/dist-packages:${PYTHONPATH:-}"
+  export PYTHONPATH="${DEPS_PREFIX}/lib/python${py_version}/site-packages:${DEPS_PREFIX}/local/lib/python${py_version}/dist-packages:${PYTHONPATH:-}"
+}
+
+deps_python_site_packages() {
+  local py_version
+  py_version="$(python - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+  echo "${DEPS_PREFIX}/lib/python${py_version}/site-packages"
+}
+
+install_opensot_collision_binding() {
+  local py_site
+  py_site="$(deps_python_site_packages)"
+  local collision_build_dir="${BUILD_DIR}/OpenSoT/lib"
+
+  shopt -s nullglob
+  local collision_modules=("${collision_build_dir}"/pyopensot_collision*.so)
+  shopt -u nullglob
+
+  if [ "${#collision_modules[@]}" -eq 0 ]; then
+    echo "ERROR: OpenSoT did not build pyopensot_collision under ${collision_build_dir}."
+    echo "       enable_collision_avoidance:=true requires this Python module."
+    exit 1
+  fi
+
+  mkdir -p "${py_site}"
+  cp "${collision_modules[@]}" "${py_site}/"
+}
+
+verify_opensot_collision_binding() {
+  local py_site
+  py_site="$(deps_python_site_packages)"
+  PYTHONPATH="${py_site}:${PYTHONPATH:-}" python - <<'PY'
+import pyopensot
+from pyopensot_collision.constraints.velocity import CollisionAvoidance
+print("Verified pyopensot_collision import.")
+PY
 }
 
 ensure_forest_matlogger2() {
@@ -223,6 +393,7 @@ ensure_forest_matlogger2() {
   fi
   forest grow matlogger2 --verbose --jobs "${JOBS}" --pwd user
   source_setup_file "${FOREST_WS}/setup.bash"
+  sanitize_native_build_env
   export AMENT_PREFIX_PATH="${DEPS_PREFIX}:/opt/ros/${ROS_DISTRO}:${AMENT_PREFIX_PATH:-}"
   export CMAKE_PREFIX_PATH="${DEPS_PREFIX}:/opt/ros/${ROS_DISTRO}:${CMAKE_PREFIX_PATH:-}"
   export LD_LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
@@ -317,7 +488,8 @@ EOF
   clone_checkout https://github.com/ADVRHumanoids/xbot2_interface.git \
     "${SRC_DIR}/xbot2_interface" devel
   cmake_install xbot2_interface "${SRC_DIR}/xbot2_interface" \
-    -DXBOT2_IFC_BUILD_TESTS=ON \
+    -DXBOT2_IFC_BUILD_TESTS=OFF \
+    -DBUILD_TESTING=OFF \
     -DXBOT2_IFC_BUILD_ROS=OFF \
     -DXBOT2_IFC_BUILD_ROS2=OFF \
     -DBoost_USE_DEBUG_RUNTIME=OFF \
@@ -357,16 +529,15 @@ EOF
   clone_checkout https://github.com/ADVRHumanoids/OpenSoT.git \
     "${SRC_DIR}/OpenSoT" 4.0-devel_ros2
   cmake_install OpenSoT "${SRC_DIR}/OpenSoT"
+  install_opensot_collision_binding
+  verify_opensot_collision_binding
 }
 
 build_livox_stack() {
   clone_checkout https://github.com/Livox-SDK/Livox-SDK2.git \
     "${SRC_DIR}/Livox-SDK2"
   for f in sdk_core/comm/define.h sdk_core/logger_handler/file_manager.h; do
-    local local_file="${SRC_DIR}/Livox-SDK2/${f}"
-    if [ -f "${local_file}" ] && ! grep -qE '^[[:space:]]*#include[[:space:]]*<cstdint>' "${local_file}"; then
-      sed -i '/^[[:space:]]*#pragma[[:space:]]\+once/a #include <cstdint>' "${local_file}"
-    fi
+    ensure_header_include "${SRC_DIR}/Livox-SDK2/${f}" cstdint
   done
   cmake_install Livox-SDK2 "${SRC_DIR}/Livox-SDK2"
 
@@ -379,7 +550,17 @@ build_livox_stack() {
 }
 
 write_env_file() {
-  cat > "${WS}/deps/env_humble_full.sh" <<EOF
+  local py_version
+  py_version="$(python - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+
+  local env_full="${WS}/deps/env_${ROS_DISTRO}_full.sh"
+  local env_short="${WS}/env_${ROS_DISTRO}.sh"
+
+  cat > "${env_full}" <<EOF
 #!/usr/bin/env bash
 export G1PILOT_DEPS_PREFIX="${DEPS_PREFIX}"
 source /opt/ros/${ROS_DISTRO}/setup.bash
@@ -389,23 +570,29 @@ export CMAKE_PREFIX_PATH="${DEPS_PREFIX}:\${CMAKE_PREFIX_PATH:-}"
 export LD_LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:\${LD_LIBRARY_PATH:-}"
 export LIBRARY_PATH="${DEPS_PREFIX}/lib:${DEPS_PREFIX}/lib/x86_64-linux-gnu:\${LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig:${DEPS_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:\${PKG_CONFIG_PATH:-}"
-export PYTHONPATH="${DEPS_PREFIX}/lib/python3.10/site-packages:${DEPS_PREFIX}/local/lib/python3.10/dist-packages:\${PYTHONPATH:-}"
+export PYTHONPATH="${DEPS_PREFIX}/lib/python${py_version}/site-packages:${DEPS_PREFIX}/local/lib/python${py_version}/dist-packages:\${PYTHONPATH:-}"
 rm -f "${WS}/.venv/bin/register-python-argcomplete" 2>/dev/null || true
 if [ -f "${WS}/install/setup.bash" ]; then
   source "${WS}/install/setup.bash"
 fi
 EOF
-  chmod +x "${WS}/deps/env_humble_full.sh"
+  chmod +x "${env_full}"
 
-  cat > "${WS}/env_humble.sh" <<EOF
+  cat > "${env_short}" <<EOF
 #!/usr/bin/env bash
-source "${WS}/deps/env_humble_full.sh"
+source "${env_full}"
 EOF
-  chmod +x "${WS}/env_humble.sh"
+  chmod +x "${env_short}"
+
+  cat > "${WS}/env_ros.sh" <<EOF
+#!/usr/bin/env bash
+source "${env_full}"
+EOF
+  chmod +x "${WS}/env_ros.sh"
 }
 
 build_ros_workspace() {
-  source_setup_file "${WS}/deps/env_humble_full.sh"
+  source_setup_file "${WS}/deps/env_${ROS_DISTRO}_full.sh"
   cd "${WS}"
   if [ "${BUILD_LIVOX}" -eq 1 ]; then
     python -m colcon build --symlink-install --packages-up-to livox_ros_driver2 --cmake-args -DROS_EDITION=ROS2 -DDISTRO_ROS="${ROS_DISTRO}"
@@ -414,6 +601,7 @@ build_ros_workspace() {
 }
 
 setup_workspace
+verify_base_python_matches_ros
 setup_python_env
 setup_unitree_sdk
 setup_build_env
@@ -438,9 +626,12 @@ write_env_file
 build_ros_workspace
 
 echo
-echo "Full user-space Humble workspace is ready: ${WS}"
+echo "Full user-space ROS 2 ${ROS_DISTRO} workspace is ready: ${WS}"
 echo "Source this in future offline ROS terminals:"
-echo "  source ${WS}/env_humble.sh"
+echo "  source ${WS}/env_ros.sh"
 echo
 echo "For real G1 terminals, source:"
-echo "  source ${REPO_ROOT}/scripts/source_g1_humble.sh <network-interface>"
+echo "  source ${REPO_ROOT}/scripts/source_g1.sh real <network-interface>"
+echo
+echo "For localhost MuJoCo/DDS terminals, source:"
+echo "  source ${REPO_ROOT}/scripts/source_g1.sh sim"
