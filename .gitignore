@@ -24,6 +24,7 @@ devel_isolated/
 # Ignore generated docs
 *.dox
 *.wikidoc
+*.md
 
 # eclipse stuff
 .project
@@ -67,3 +68,7 @@ hardware/~$armAssembly.SLDASM
 config/reachability/*.npz
 
 *.FCBak
+
+# Local notes
+running_notes.md
+static_review.md

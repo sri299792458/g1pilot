@@ -9,15 +9,19 @@ from launch_ros.parameter_descriptions import ParameterValue
 import os
 
 package_name = "g1pilot"
-default_urdf_file_name = "g1_29dof_lock_waist.urdf"
 allowed_urdf_file_names = (
     "g1_29dof_lock_waist.urdf",
+    "g1_29dof_lock_waist_dx3.urdf",
     "g1_29dof.urdf",
     "g1_29dof_dx3.urdf",
     "g1_29dof_upperbody.urdf",
     "g1_29dof_dx3_upperbody.urdf",
 )
 rviz_config_file_name = "29dof.rviz"
+visual_urdf_by_hand_model = {
+    "dummy": "g1_29dof_lock_waist.urdf",
+    "dex3": "g1_29dof_lock_waist_dx3.urdf",
+}
 
 def _as_bool(value):
     return str(value).lower() in ("1", "true", "yes", "on")
@@ -35,6 +39,14 @@ def _validate_robot_interface(context):
 
 def _load_robot_description(context):
     urdf_file_name = LaunchConfiguration("urdf_file").perform(context).strip()
+    hand_model = LaunchConfiguration("hand_model").perform(context).strip().lower()
+    if not urdf_file_name:
+        if hand_model not in visual_urdf_by_hand_model:
+            raise RuntimeError(
+                f"Unknown hand_model {hand_model!r}. Allowed values: "
+                f"{', '.join(visual_urdf_by_hand_model)}"
+            )
+        urdf_file_name = visual_urdf_by_hand_model[hand_model]
     if os.path.basename(urdf_file_name) != urdf_file_name:
         raise RuntimeError(
             "urdf_file must be a packaged URDF file name, not a path. "
@@ -56,6 +68,13 @@ def _load_robot_description(context):
 
 def _launch_setup(context):
     package_share, urdf, robot_desc = _load_robot_description(context)
+    hand_model = LaunchConfiguration("hand_model").perform(context).strip().lower()
+    if hand_model not in visual_urdf_by_hand_model:
+        raise RuntimeError(
+            f"Unknown hand_model {hand_model!r}. Allowed values: "
+            f"{', '.join(visual_urdf_by_hand_model)}"
+        )
+    include_dex3 = hand_model == "dex3"
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_robot = LaunchConfiguration("use_robot")
     publish_joint_states = LaunchConfiguration("publish_joint_states")
@@ -77,8 +96,23 @@ def _launch_setup(context):
                 'use_robot': ParameterValue(use_robot, value_type=bool),
                 'sim_rate_hz': ParameterValue(sim_rate_hz, value_type=float),
                 'publish_joint_states': ParameterValue(publish_joint_states, value_type=bool),
+                'joint_states_topic': '/g1pilot/body/joint_states',
             }],
             output='screen'
+        ),
+
+        Node(
+            package='g1pilot',
+            executable='joint_state_mux',
+            name='joint_state_mux',
+            parameters=[{
+                'body_topic': '/g1pilot/body/joint_states',
+                'left_hand_topic': '/g1pilot/dx3/left/joint_states',
+                'right_hand_topic': '/g1pilot/dx3/right/joint_states',
+                'output_topic': '/joint_states',
+                'include_dex3': include_dex3,
+            }],
+            output='screen',
         ),
 
         Node(
@@ -132,8 +166,19 @@ def generate_launch_description():
                               description="Whether mola_fixed publishes map -> pelvis TF"),
         DeclareLaunchArgument("arm_controlled", default_value="both",
                                 description="Which arm to control: 'left', 'right', or 'both'"),
-        DeclareLaunchArgument("urdf_file", default_value=default_urdf_file_name,
-                              description="Packaged G1 URDF file to publish"),
+        DeclareLaunchArgument(
+            "hand_model",
+            default_value="dummy",
+            description="Visual hand model: dummy or dex3",
+        ),
+        DeclareLaunchArgument(
+            "urdf_file",
+            default_value="",
+            description=(
+                "Packaged G1 URDF file to publish. Empty selects the visual URDF "
+                "from hand_model."
+            ),
+        ),
         OpaqueFunction(function=_validate_robot_interface),
         OpaqueFunction(function=_launch_setup),
     ])

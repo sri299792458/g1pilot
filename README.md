@@ -1,5 +1,124 @@
 # G1Pilot
 
+## Fork-Specific Addition: MuJoCo Simulation Backend
+
+The main architectural change in this fork is a backend swap. The G1Pilot
+application layer stays the same; only the robot backend changes:
+`source scripts/source_g1.sh real <interface>` targets the real G1, while
+`source scripts/source_g1.sh sim` targets MuJoCo.
+
+```mermaid
+flowchart LR
+    App["G1Pilot application layer\nRViz, OpenSoT, dx3_controller"]
+    Contract["Unitree-style contracts\nrt/arm_sdk, rt/dex3/*, rt/lowstate"]
+    Real["real backend\nUnitree G1 + onboard controllers"]
+    Sim["sim backend\ng1pilot_mujoco_plant + MuJoCo"]
+
+    App --> Contract
+    Contract -- "real" --> Real
+    Contract -- "sim" --> Sim
+```
+
+The simulator keeps the same application interfaces as the robot path: OpenSoT
+still publishes arm intent on `rt/arm_sdk`, Dex3 commands still use
+`rt/dex3/{left,right}/cmd`, and robot state is still published through Unitree
+DDS-style state topics.
+
+Detailed sim command path:
+
+```mermaid
+flowchart LR
+    RViz["RViz hand marker"] --> OpenSoT["OpenSoT arm solver"]
+    OpenSoT -- "rt/arm_sdk" --> Merge["g1pilot_mujoco_plant\ncommand merge"]
+    Dex3["dx3_controller"] -- "rt/dex3/*/cmd" --> Merge
+    Policy["OpenHomie lower-body policy"] --> Merge
+    Merge --> Torque["PD torque control"]
+    Torque --> MJ["MuJoCo physics\nopenhomie_g1_29dof.xml"]
+```
+
+Detailed sim state path:
+
+```mermaid
+flowchart LR
+    MJ["MuJoCo physics\nopenhomie_g1_29dof.xml"] --> State["g1pilot_mujoco_plant\nstate packing"]
+    State -- "rt/lowstate" --> OpenSoT["OpenSoT arm solver"]
+    State -- "rt/dex3/*/state" --> Dex3["dx3_controller"]
+    State -- "joint states" --> RVizModel["robot_state_publisher\nRViz RobotModel"]
+```
+
+The important ownership rule is that `g1pilot_mujoco_plant` owns the simulated
+robot backend. It loads the MuJoCo XML, runs the OpenHomie standing policy,
+merges arm/Dex3 intent, computes actuator torques, steps physics, and publishes
+simulated state.
+
+Demo videos:
+
+- [MuJoCo RViz arm-control demo](https://github.com/sri299792458/g1pilot/releases/download/mujoco-demo-media-2026-07-01/g1pilot-mujoco-rviz-arm-demo.mp4)
+- [MuJoCo Dex3 open/close demo](https://github.com/sri299792458/g1pilot/releases/download/mujoco-demo-media-2026-07-01/g1pilot-mujoco-dex3-open-close-demo.mp4)
+
+### Run MuJoCo + RViz
+
+Download the generated reachability map once. It is hosted as a release asset
+because it is too large to keep in normal Git history:
+
+```bash
+cd /path/to/g1pilot
+mkdir -p config/reachability
+curl -L \
+  -o config/reachability/g1_29dof_lock_waist_reachability.npz \
+  https://github.com/sri299792458/g1pilot/releases/download/mujoco-demo-media-2026-07-01/g1_29dof_lock_waist_reachability.npz
+```
+
+Terminal 1 starts the G1Pilot application layer:
+
+```bash
+cd /path/to/g1pilot
+source scripts/source_g1.sh sim
+
+ros2 launch g1pilot mujoco_openhomie_manipulation.launch.py \
+  hand_model:=dex3
+```
+
+Terminal 2 starts the MuJoCo plant:
+
+```bash
+cd /path/to/g1pilot
+source scripts/source_g1.sh sim
+
+ros2 run g1pilot g1pilot_mujoco_plant
+```
+
+The plant currently loads
+`description_files/xml/openhomie_g1_29dof.xml`, which is the generated
+OpenHomie/Unitree-interface MuJoCo model with Dex3 hands. The `hand_model`
+launch argument selects the ROS/RViz/controller hand path; it does not switch
+the physical MuJoCo XML.
+
+For a quick headless stability check:
+
+```bash
+cd /path/to/g1pilot
+source scripts/source_g1.sh sim
+
+ros2 run g1pilot g1pilot_mujoco_plant -- --headless --duration 8
+```
+
+Dex3 smoke commands:
+
+```bash
+source scripts/source_g1.sh sim
+ros2 topic pub --once /g1pilot/dx3/left/command std_msgs/msg/String '{data: close}'
+ros2 topic pub --once /g1pilot/dx3/left/command std_msgs/msg/String '{data: open}'
+```
+
+For RViz arm markers, enable the global arm gate and then enable each marker
+from its RViz context menu:
+
+```bash
+source scripts/source_g1.sh sim
+ros2 topic pub --once /g1pilot/arms/enabled std_msgs/msg/Bool '{data: true}'
+```
+
 [![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](
 https://opensource.org/licenses/BSD-3-Clause)
 [![Ros Version](https://img.shields.io/badge/ROS2-Jazzy-green)](
@@ -40,6 +159,7 @@ G1Pilot is an open‑source ROS 2 package for Unitree G1 humanoid robots. Basic
 | <img src="https://github.com/hucebot/g1pilot/blob/main/images/odometry_and_pathplanner.gif" alt="Path Planner" width="380"> | <img src="https://github.com/hucebot/g1pilot/blob/main/images/fake_streamdeck.png" alt="Control Interface" width="380">  |
 
 ## Table of Contents
+- [Fork-Specific Addition: MuJoCo Simulation Backend](#fork-specific-addition-mujoco-simulation-backend)
 - [Pre-requisites](#pre-requisites)
 - [Quick Start](#quick-start)
 - [Nodes Overview](#-nodes-overview)

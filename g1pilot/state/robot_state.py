@@ -89,19 +89,21 @@ class RobotState(Node):
         self.declare_parameter('interface', '')
         self.declare_parameter('domain_id', 0)
         self.declare_parameter('publish_joint_states', True)
+        self.declare_parameter('joint_states_topic', '/g1pilot/body/joint_states')
         self.declare_parameter('sim_rate_hz', 50.0)
 
         self.use_robot = bool(self.get_parameter('use_robot').value)
         interface = self.get_parameter('interface').get_parameter_value().string_value
         self.domain_id = int(self.get_parameter('domain_id').value)
         self.publish_joint_states = bool(self.get_parameter('publish_joint_states').value)
+        self.joint_states_topic = self.get_parameter('joint_states_topic').get_parameter_value().string_value
         self.sim_rate_hz = float(self.get_parameter('sim_rate_hz').value)
         if self.sim_rate_hz <= 0.0:
             raise ValueError(f"sim_rate_hz must be greater than 0.0, got {self.sim_rate_hz}")
         self.ns = '/g1pilot'
 
         qos_profile = QoSProfile(depth=10)
-        self.joint_pub = self.create_publisher(JointState, "/joint_states", qos_profile)
+        self.joint_pub = self.create_publisher(JointState, self.joint_states_topic, qos_profile)
         self.imu_pub = self.create_publisher(Imu, f"{self.ns}/imu", qos_profile)
         self.motor_state_pub = self.create_publisher(MotorStateList, f"{self.ns}/motor_state", qos_profile)
 

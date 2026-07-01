@@ -26,7 +26,6 @@ setup(
             'launch/mola_launcher.launch.py',
             'launch/livox_launcher.launch.py',
             'launch/manipulation_launcher.launch.py',
-            'launch/mujoco_openhomie_stand.launch.py',
             'launch/mujoco_openhomie_manipulation.launch.py',
 
             'launch/bringup_launcher.launch.py',
@@ -65,6 +64,7 @@ setup(
         'console_scripts': [
             # States Nodes
             'robot_state = g1pilot.state.robot_state:main',
+            'joint_state_mux = g1pilot.state.joint_state_mux:main',
 
             # Manipulation Nodes
             'interactive_marker = g1pilot.manipulation.interactive_marker:main',
@@ -73,8 +73,6 @@ setup(
             'opensot_solver = g1pilot.manipulation.opensot_solver:main',
 
             # Simulation Nodes
-            'openhomie_lowcmd_base = g1pilot.simulation.openhomie_lowcmd_base:main',
-            'arm_sdk_lowcmd_overlay = g1pilot.simulation.arm_sdk_lowcmd_overlay:main',
             'g1pilot_mujoco_plant = g1pilot.simulation.mujoco_plant:main',
 
             # Teleoperation Nodes

@@ -139,6 +139,7 @@ class G1CollisionAvoidanceNode(Node):
         self.declare_parameter("send_cmds_to_robot", True)
         self.declare_parameter("publish_arm_sdk", False)
         self.declare_parameter("publish_joint_states_opensot", False)
+        self.declare_parameter("robot_description", "")
         self.declare_parameter("robot_description_timeout_s", 10.0)
         self.declare_parameter("arm_controlled", "both")
         self.declare_parameter("enable_reachability_gate", False)
@@ -154,6 +155,7 @@ class G1CollisionAvoidanceNode(Node):
         self.send_cmds_to_robot = bool(self.get_parameter("send_cmds_to_robot").value)
         self.publish_arm_sdk = bool(self.get_parameter("publish_arm_sdk").value) or self.use_robot
         self.publish_joint_states_opensot = bool(self.get_parameter("publish_joint_states_opensot").value)
+        robot_description_param = self.get_parameter("robot_description").get_parameter_value().string_value
         self.publish_pelvis_tf = bool(self.get_parameter("publish_pelvis_tf").value)
         self.robot_description_timeout_s = float(self.get_parameter("robot_description_timeout_s").value)
         self.enable_reachability_gate = bool(self.get_parameter("enable_reachability_gate").value)
@@ -191,9 +193,6 @@ class G1CollisionAvoidanceNode(Node):
         self.rejected_marker_snaps = set()
         self._last_reachability_warning_time = {}
 
-
-
-        self.client = self.create_client(GetParameters, "/robot_state_publisher/get_parameters")
         self.joint_state_publisher = self.create_publisher(JointState, "/joint_states", 10)
         self.base_height_publisher = self.create_publisher(Float64, "/base_height", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -210,29 +209,32 @@ class G1CollisionAvoidanceNode(Node):
                 PoseStamped, LEFT_HAND_GOAL_TOPIC, self.left_hand_goal_callback, 10
             )
 
-        wait_started = time.monotonic()
-        while not self.client.wait_for_service(timeout_sec=1.0):
-            elapsed = time.monotonic() - wait_started
-            if elapsed >= self.robot_description_timeout_s:
-                raise RuntimeError(
-                    "Timed out waiting for /robot_state_publisher/get_parameters. "
-                    "Start robot_state_publisher or launch manipulation with "
-                    "start_robot_state_publisher:=true."
-                )
-            self.get_logger().warn("Service /robot_state_publisher/get_parameters not available, waiting...")
-
-        request = GetParameters.Request()
-        request.names = ["robot_description"]
-        future = self.client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=self.robot_description_timeout_s)
-
-        self.urdf = None
-        if future.done() and future.result() is not None:
-            values = future.result().values
-            for val in values:
-                self.urdf = val.string_value
+        self.urdf = robot_description_param.strip()
+        if self.urdf:
+            self.get_logger().info("Using robot_description parameter for OpenSoT model")
         else:
-            raise RuntimeError("Failed to get robot_description from robot_state_publisher")
+            self.client = self.create_client(GetParameters, "/robot_state_publisher/get_parameters")
+            wait_started = time.monotonic()
+            while not self.client.wait_for_service(timeout_sec=1.0):
+                elapsed = time.monotonic() - wait_started
+                if elapsed >= self.robot_description_timeout_s:
+                    raise RuntimeError(
+                        "Timed out waiting for /robot_state_publisher/get_parameters. "
+                        "Pass robot_description directly or start robot_state_publisher."
+                    )
+                self.get_logger().warn("Service /robot_state_publisher/get_parameters not available, waiting...")
+
+            request = GetParameters.Request()
+            request.names = ["robot_description"]
+            future = self.client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=self.robot_description_timeout_s)
+
+            if future.done() and future.result() is not None:
+                values = future.result().values
+                for val in values:
+                    self.urdf = val.string_value
+            else:
+                raise RuntimeError("Failed to get robot_description from robot_state_publisher")
 
         self._initialize_reachability_gate()
 
