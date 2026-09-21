@@ -367,11 +367,9 @@ Visualization Manager:
         head_link:
           Value: false
         imu_in_pelvis:
-          Value: false
+          Value: true
         imu_in_torso:
           Value: false
-        imu_link:
-          Value: true
         left_ankle_pitch_link:
           Value: true
         left_ankle_roll_link:
@@ -487,8 +485,6 @@ Visualization Manager:
         world:
           pelvis:
             imu_in_pelvis:
-              {}
-            imu_link:
               {}
             left_hip_pitch_link:
               left_hip_roll_link:
@@ -696,7 +692,7 @@ Visualization Manager:
             Value: /g1pilot/path
           Value: true
         - Alpha: 1
-          Class: rviz_default_plugins/PointStamped
+          Class: rviz_default_plugins/Pose
           Color: 204; 41; 204
           Enabled: true
           History Length: 1
@@ -1077,7 +1073,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /goal_pose
+        Value: /g1pilot/goal
     - Class: rviz_default_plugins/PublishPoint
       Single click: true
       Topic:

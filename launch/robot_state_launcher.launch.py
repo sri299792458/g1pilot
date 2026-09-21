@@ -3,58 +3,116 @@
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, EnvironmentVariable
 from launch_ros.parameter_descriptions import ParameterValue
 import os
-import sys
 
 package_name = "g1pilot"
-urdf_file_name = "g1_29dof.urdf"
+allowed_urdf_file_names = (
+    "g1_29dof_lock_waist.urdf",
+    "g1_29dof_lock_waist_dx3.urdf",
+    "g1_29dof.urdf",
+    "g1_29dof_dx3.urdf",
+    "g1_29dof_upperbody.urdf",
+    "g1_29dof_dx3_upperbody.urdf",
+)
 rviz_config_file_name = "29dof.rviz"
+visual_urdf_by_hand_model = {
+    "dummy": "g1_29dof_lock_waist.urdf",
+    "dex3": "g1_29dof_lock_waist_dx3.urdf",
+}
 
-def generate_launch_description():
-    if not os.environ.get("G1_INTERFACE"):
-        sys.exit("ERROR: G1_INTERFACE environment variable is not set.\n"
-                 "Set it to your network interface, e.g.: export G1_INTERFACE=eno2")
+def _as_bool(value):
+    return str(value).lower() in ("1", "true", "yes", "on")
 
+def _validate_robot_interface(context):
+    use_robot = _as_bool(LaunchConfiguration("use_robot").perform(context))
+    interface = LaunchConfiguration("interface").perform(context).strip()
+    if use_robot and not interface:
+        raise RuntimeError(
+            "G1_INTERFACE is required when use_robot:=true. "
+            "Set it with `export G1_INTERFACE=<iface>`, pass `interface:=<iface>`, "
+            "or launch with `use_robot:=false` for offline mode."
+        )
+    return []
+
+def _load_robot_description(context):
+    urdf_file_name = LaunchConfiguration("urdf_file").perform(context).strip()
+    hand_model = LaunchConfiguration("hand_model").perform(context).strip().lower()
+    if not urdf_file_name:
+        if hand_model not in visual_urdf_by_hand_model:
+            raise RuntimeError(
+                f"Unknown hand_model {hand_model!r}. Allowed values: "
+                f"{', '.join(visual_urdf_by_hand_model)}"
+            )
+        urdf_file_name = visual_urdf_by_hand_model[hand_model]
+    if os.path.basename(urdf_file_name) != urdf_file_name:
+        raise RuntimeError(
+            "urdf_file must be a packaged URDF file name, not a path. "
+            f"Allowed values: {', '.join(allowed_urdf_file_names)}"
+        )
+    if urdf_file_name not in allowed_urdf_file_names:
+        raise RuntimeError(
+            f"Unknown urdf_file {urdf_file_name!r}. "
+            f"Allowed values: {', '.join(allowed_urdf_file_names)}"
+        )
+
+    package_share = get_package_share_directory(package_name)
+    urdf = os.path.join(
+        package_share, "description_files/urdf", urdf_file_name
+    )
+    with open(urdf, "r") as infp:
+        robot_desc = infp.read()
+    return package_share, urdf, robot_desc
+
+def _launch_setup(context):
+    package_share, urdf, robot_desc = _load_robot_description(context)
+    hand_model = LaunchConfiguration("hand_model").perform(context).strip().lower()
+    if hand_model not in visual_urdf_by_hand_model:
+        raise RuntimeError(
+            f"Unknown hand_model {hand_model!r}. Allowed values: "
+            f"{', '.join(visual_urdf_by_hand_model)}"
+        )
+    include_dex3 = hand_model == "dex3"
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_robot = LaunchConfiguration("use_robot")
     publish_joint_states = LaunchConfiguration("publish_joint_states")
     interface = LaunchConfiguration("interface")
+    domain_id = LaunchConfiguration("domain_id")
     sim_rate_hz = LaunchConfiguration("sim_rate_hz")
+    mola_fixed_publish_tf = LaunchConfiguration("mola_fixed_publish_tf")
 
-    urdf = os.path.join(
-        get_package_share_directory(package_name), "description_files/urdf", urdf_file_name
-    )
-    with open(urdf, "r") as infp:
-        robot_desc = infp.read()
+    rviz_config = os.path.join(package_share, "config", rviz_config_file_name)
 
-    return LaunchDescription([
-        DeclareLaunchArgument("use_sim_time", default_value="false",
-                              description="Use simulation (Gazebo) clock if true"),
-        DeclareLaunchArgument("use_robot", default_value="true",
-                              description="Connect to real robot if true"),
-        DeclareLaunchArgument("publish_joint_states", default_value="false",
-                              description="Publish joint_states from node"),
-        DeclareLaunchArgument("interface", default_value=EnvironmentVariable("G1_INTERFACE"),
-                              description="Network interface for Unitree SDK"),
-        DeclareLaunchArgument("sim_rate_hz", default_value="50.0",
-                              description="Simulation rate when use_robot=false"),
-        DeclareLaunchArgument("arm_controlled", default_value="both",
-                                description="Which arm to control: 'left', 'right', or 'both'"),
-
+    return [
         Node(
             package='g1pilot',
             executable='robot_state',
             name='robot_state',
             parameters=[{
                 'interface': interface,
+                'domain_id': ParameterValue(domain_id, value_type=int),
                 'use_robot': ParameterValue(use_robot, value_type=bool),
                 'sim_rate_hz': ParameterValue(sim_rate_hz, value_type=float),
                 'publish_joint_states': ParameterValue(publish_joint_states, value_type=bool),
+                'joint_states_topic': '/g1pilot/body/joint_states',
             }],
             output='screen'
+        ),
+
+        Node(
+            package='g1pilot',
+            executable='joint_state_mux',
+            name='joint_state_mux',
+            parameters=[{
+                'body_topic': '/g1pilot/body/joint_states',
+                'left_hand_topic': '/g1pilot/dx3/left/joint_states',
+                'right_hand_topic': '/g1pilot/dx3/right/joint_states',
+                'output_topic': '/joint_states',
+                'include_dex3': include_dex3,
+            }],
+            output='screen',
         ),
 
         Node(
@@ -62,22 +120,9 @@ def generate_launch_description():
             executable='mola_fixed',
             name='mola_fixed',
             parameters=[{
+                'publish_tf': ParameterValue(mola_fixed_publish_tf, value_type=bool),
             }],
             output='screen'
-        ),
-
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='mid360_to_livox_tf',
-            arguments=['0','0','0','0','0','3.14159265','mid360_link','livox_frame']
-        ),
-
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='pelvis_to_base_link_tf',
-            arguments=['0','0','0','0','0','0','base_link','pelvis']
         ),
 
         Node(
@@ -98,7 +143,42 @@ def generate_launch_description():
             name="rviz2",
             arguments=[
                 "-d",
-                os.path.join("/ros2_ws/src/g1pilot/config", rviz_config_file_name)
+                rviz_config
             ],
         ),
+    ]
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument("use_sim_time", default_value="false",
+                              description="Use simulation (Gazebo) clock if true"),
+        DeclareLaunchArgument("use_robot", default_value="true",
+                              description="Connect to real robot if true"),
+        DeclareLaunchArgument("domain_id", default_value=EnvironmentVariable("G1_UNITREE_DOMAIN_ID", default_value="0"),
+                              description="Unitree DDS domain ID for robot_state when use_robot=true"),
+        DeclareLaunchArgument("publish_joint_states", default_value="false",
+                              description="Publish joint_states from node"),
+        DeclareLaunchArgument("interface", default_value=EnvironmentVariable("G1_INTERFACE", default_value=""),
+                              description="Network interface for Unitree SDK"),
+        DeclareLaunchArgument("sim_rate_hz", default_value="50.0",
+                              description="Simulation rate when use_robot=false"),
+        DeclareLaunchArgument("mola_fixed_publish_tf", default_value="true",
+                              description="Whether mola_fixed publishes map -> pelvis TF"),
+        DeclareLaunchArgument("arm_controlled", default_value="both",
+                                description="Which arm to control: 'left', 'right', or 'both'"),
+        DeclareLaunchArgument(
+            "hand_model",
+            default_value="dummy",
+            description="Visual hand model: dummy or dex3",
+        ),
+        DeclareLaunchArgument(
+            "urdf_file",
+            default_value="",
+            description=(
+                "Packaged G1 URDF file to publish. Empty selects the visual URDF "
+                "from hand_model."
+            ),
+        ),
+        OpaqueFunction(function=_validate_robot_interface),
+        OpaqueFunction(function=_launch_setup),
     ])

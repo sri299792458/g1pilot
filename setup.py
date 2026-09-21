@@ -26,6 +26,7 @@ setup(
             'launch/mola_launcher.launch.py',
             'launch/livox_launcher.launch.py',
             'launch/manipulation_launcher.launch.py',
+            'launch/mujoco_openhomie_manipulation.launch.py',
 
             'launch/bringup_launcher.launch.py',
             'launch/bringup_opensot.launch.py',
@@ -45,10 +46,12 @@ setup(
 
         # Configuration Files
         (f'share/{package_name}/config',
-            expand(['config/*.yaml'])),
+            expand(['config/*.yaml', 'config/*.json', 'config/*.rviz'])),
+        (f'share/{package_name}/config/reachability',
+            expand(['config/reachability/*.npz'])),
 
-        # RViz
-        (f'share/{package_name}/rviz', expand(['rviz/*.rviz'])),
+        # MOLA pipeline files
+        (f'share/{package_name}/pipelines', expand(['pipelines/*.yaml'])),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -61,11 +64,16 @@ setup(
         'console_scripts': [
             # States Nodes
             'robot_state = g1pilot.state.robot_state:main',
+            'joint_state_mux = g1pilot.state.joint_state_mux:main',
 
             # Manipulation Nodes
             'interactive_marker = g1pilot.manipulation.interactive_marker:main',
             'dx3_controller = g1pilot.manipulation.dx3_hand:main',
+            'generate_reachability_map = g1pilot.manipulation.generate_reachability_map:main',
             'opensot_solver = g1pilot.manipulation.opensot_solver:main',
+
+            # Simulation Nodes
+            'g1pilot_mujoco_plant = g1pilot.simulation.mujoco_plant:main',
 
             # Teleoperation Nodes
             'joystick = g1pilot.teleoperation.joystick:main',

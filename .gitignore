@@ -24,6 +24,7 @@ devel_isolated/
 # Ignore generated docs
 *.dox
 *.wikidoc
+*.md
 
 # eclipse stuff
 .project
@@ -50,6 +51,7 @@ qtcreator-*
 # Vscode
 .vscode
 /log
+/install/
 
 # Catkin custom files
 CATKIN_IGNORE
@@ -62,5 +64,11 @@ hardware/~$armAssembly.SLDASM
 
 /rosbags
 
+# Generated reachability artifacts
+config/reachability/*.npz
+
 *.FCBak
 
+# Local notes
+running_notes.md
+static_review.md
