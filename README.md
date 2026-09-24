@@ -1,57 +1,34 @@
-# G1Pilot
+# G1Pilot — MuJoCo simulation fork
+
+An initial MuJoCo backend for G1Pilot, allowing its arm and Dex3 interfaces to
+control a simulated G1. This fork builds on
+[Hucebot's G1Pilot](https://github.com/hucebot/g1pilot), Unitree models and the
+OpenHomie lower-body policy. The simulation addition is on `dev`.
+
+[![RViz arm controls beside the G1 in MuJoCo](docs/assets/mujoco-rviz-short-demo.jpg)](https://sri299792458.github.io/g1-research-docs/simulation/mujoco.html#demonstrations)
+
+*Watch the MuJoCo/RViz arm-control and Dex3 hand demonstrations in the guide.*
+
+**[Simulator setup, policy and demonstrations](https://sri299792458.github.io/g1-research-docs/simulation/mujoco.html)** ·
+[Full G1 guide](https://sri299792458.github.io/g1-research-docs/) ·
+[Documentation source](https://github.com/sri299792458/g1-research-docs)
 
 ## Fork-Specific Addition: MuJoCo Simulation Backend
 
-The main architectural change in this fork is a backend swap. The G1Pilot
-application layer stays the same; only the robot backend changes:
-`source scripts/source_g1.sh real <interface>` targets the real G1, while
-`source scripts/source_g1.sh sim` targets MuJoCo.
+`source scripts/source_g1.sh sim` selects the simulation environment. The
+application publishes arm intent on `rt/arm_sdk` and Dex3 commands on
+`rt/dex3/{left,right}/cmd`, while the plant publishes simulated state through
+the corresponding Unitree DDS interfaces.
 
-```mermaid
-flowchart LR
-    App["G1Pilot application layer\nRViz, OpenSoT, dx3_controller"]
-    Contract["Unitree-style contracts\nrt/arm_sdk, rt/dex3/*, rt/lowstate"]
-    Real["real backend\nUnitree G1 + onboard controllers"]
-    Sim["sim backend\ng1pilot_mujoco_plant + MuJoCo"]
+`g1pilot_mujoco_plant` loads the model, runs the OpenHomie standing policy,
+combines arm and hand commands, computes actuator torques and steps MuJoCo.
+This supports application development through those interfaces; it does not
+reproduce Unitree's proprietary walking controller or validate the separate
+tabletop hardware-control and watchdog lifecycle.
 
-    App --> Contract
-    Contract -- "real" --> Real
-    Contract -- "sim" --> Sim
-```
-
-The simulator keeps the same application interfaces as the robot path: OpenSoT
-still publishes arm intent on `rt/arm_sdk`, Dex3 commands still use
-`rt/dex3/{left,right}/cmd`, and robot state is still published through Unitree
-DDS-style state topics.
-
-Detailed sim command path:
-
-```mermaid
-flowchart LR
-    RViz["RViz hand marker"] --> OpenSoT["OpenSoT arm solver"]
-    OpenSoT -- "rt/arm_sdk" --> Merge["g1pilot_mujoco_plant\ncommand merge"]
-    Dex3["dx3_controller"] -- "rt/dex3/*/cmd" --> Merge
-    Policy["OpenHomie lower-body policy"] --> Merge
-    Merge --> Torque["PD torque control"]
-    Torque --> MJ["MuJoCo physics\nopenhomie_g1_29dof.xml"]
-```
-
-Detailed sim state path:
-
-```mermaid
-flowchart LR
-    MJ["MuJoCo physics\nopenhomie_g1_29dof.xml"] --> State["g1pilot_mujoco_plant\nstate packing"]
-    State -- "rt/lowstate" --> OpenSoT["OpenSoT arm solver"]
-    State -- "rt/dex3/*/state" --> Dex3["dx3_controller"]
-    State -- "joint states" --> RVizModel["robot_state_publisher\nRViz RobotModel"]
-```
-
-The important ownership rule is that `g1pilot_mujoco_plant` owns the simulated
-robot backend. It loads the MuJoCo XML, runs the OpenHomie standing policy,
-merges arm/Dex3 intent, computes actuator torques, steps physics, and publishes
-simulated state.
-
-Demo videos:
+Start with the [simulation guide](https://sri299792458.github.io/g1-research-docs/simulation/mujoco.html) for environment
+setup and the public upstream policy download before using the launch commands
+below. Direct video downloads:
 
 - [MuJoCo RViz arm-control demo](https://github.com/sri299792458/g1pilot/releases/download/mujoco-demo-media-2026-07-01/g1pilot-mujoco-rviz-arm-demo.mp4)
 - [MuJoCo Dex3 open/close demo](https://github.com/sri299792458/g1pilot/releases/download/mujoco-demo-media-2026-07-01/g1pilot-mujoco-dex3-open-close-demo.mp4)
@@ -118,6 +95,11 @@ from its RViz context menu:
 source scripts/source_g1.sh sim
 ros2 topic pub --once /g1pilot/arms/enabled std_msgs/msg/Bool '{data: true}'
 ```
+
+## Upstream G1Pilot
+
+The following describes the upstream robot-control project and retains its
+setup instructions and credits. For this fork's MuJoCo backend, start above.
 
 [![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](
 https://opensource.org/licenses/BSD-3-Clause)
@@ -285,7 +267,7 @@ We welcome contributions to **G1Pilot**! If you have suggestions, improvements, 
 4. Submit a pull request detailing your changes.
 
 
-## Maintainer
+## Upstream maintainer
 This package is maintained by:
 
 **Clemente Donoso**  
